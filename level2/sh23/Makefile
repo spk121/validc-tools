@@ -5,7 +5,7 @@ OBJS = main.o execute.o variables.o builtins.o parser.o control.o functions.o ut
 sh23: $(OBJS)
 	$(CC) $(CFLAGS) -o sh23 $(OBJS)
 
-main.o: main.c execute.h variables.h
+main.o: main.c execute.h variables.h parser.h builtins.h
 	$(CC) $(CFLAGS) -c main.c
 
 execute.o: execute.c execute.h builtins.h variables.h
@@ -17,7 +17,7 @@ variables.o: variables.c variables.h execute.h
 builtins.o: builtins.c builtins.h variables.h
 	$(CC) $(CFLAGS) -c builtins.c
 
-parser.o: parser.c parser.h
+parser.o: parser.c parser.h builtins.h
 	$(CC) $(CFLAGS) -c parser.c
 
 control.o: control.c control.h

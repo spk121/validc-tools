@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "parser.h"
+#include "builtins.h"
 
 #define MAX_INPUT 1024
 
@@ -10,7 +11,6 @@ int main() {
     char *tokens[MAX_TOKENS];
     int token_count;
 
-    // Allocate token array
     for (int i = 0; i < MAX_TOKENS; i++) {
         tokens[i] = malloc(MAX_TOKEN_LEN);
         if (!tokens[i]) {
@@ -18,6 +18,10 @@ int main() {
             exit(1);
         }
     }
+
+    // Predefine some aliases
+    builtin_alias("ll", "ls -l");
+    builtin_alias("dir", "ls dir ");
 
     while (1) {
         printf("> ");
@@ -36,7 +40,6 @@ int main() {
         }
     }
 
-    // Free token array
     for (int i = 0; i < MAX_TOKENS; i++) {
         free(tokens[i]);
     }

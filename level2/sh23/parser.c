@@ -2,13 +2,12 @@
 #include <string.h>
 #include <ctype.h>
 #include "parser.h"
+#include "builtins.h"
 
-// Operator characters (POSIX shell operators)
 static const char *operators[] = {
     "&&", "||", ";", "&", "|", "(", ")", "<", ">", ">>", "<<", NULL
 };
 
-// Check if a string is an operator or part of one
 static int is_operator_start(char c) {
     return (c == '&' || c == '|' || c == ';' || c == '(' || c == ')' || c == '<' || c == '>');
 }
@@ -20,7 +19,6 @@ static int is_operator(const char *str) {
     return 0;
 }
 
-// Forward declaration for recursive expansion handling
 static const char *parse_expansion(const char *input, char *token, int *pos, int max_len, int in_double_quote);
 
 void tokenize(const char *input, char **tokens, int *token_count) {
@@ -31,24 +29,20 @@ void tokenize(const char *input, char **tokens, int *token_count) {
     int in_word = 0;
 
     while (*p) {
-        // Rule 1: End of input
         if (*p == '\0') {
             if (in_word) {
                 current_token[pos] = '\0';
                 strncpy(tokens[*token_count], current_token, MAX_TOKEN_LEN);
-                tokens[*token_count][MAX_TOKEN_LEN - 1] = '\0';
                 (*token_count)++;
             }
             break;
         }
 
-        // Rule 8: Comment (only if not in a word)
         if (*p == '#' && !in_word) {
             while (*p && *p != '\n') p++;
             continue;
         }
 
-        // Rule 3: Quoting
         if (*p == '\\' || *p == '\'' || *p == '"') {
             if (!in_word) in_word = 1;
             if (pos >= MAX_TOKEN_LEN - 1) {
@@ -58,18 +52,16 @@ void tokenize(const char *input, char **tokens, int *token_count) {
                 pos = 0;
             }
 
-            // Backslash
             if (*p == '\\') {
                 current_token[pos++] = *p++;
-                if (*p && *p != '\n') { // Exclude newline
+                if (*p && *p != '\n') {
                     current_token[pos++] = *p++;
                 } else if (*p == '\n') {
-                    p++; // Skip newline, backslash escapes it
+                    p++;
                 }
                 continue;
             }
 
-            // Single quotes
             if (*p == '\'') {
                 current_token[pos++] = *p++;
                 while (*p && *p != '\'') {
@@ -79,23 +71,22 @@ void tokenize(const char *input, char **tokens, int *token_count) {
                     current_token[pos++] = *p++;
                 } else {
                     fprintf(stderr, "Error: Unmatched single quote\n");
-                    return; // Undefined result, stop for now
+                    return;
                 }
                 continue;
             }
 
-            // Double quotes
             if (*p == '"') {
                 current_token[pos++] = *p++;
                 while (*p && *p != '"') {
                     if (*p == '\\') {
                         current_token[pos++] = *p++;
-                        if (*p && strchr("$`\"\\", *p)) { // Special escapes in double quotes
+                        if (*p && strchr("$`\"\\", *p)) {
                             current_token[pos++] = *p++;
                         } else if (*p == '\n') {
-                            p++; // Skip newline
+                            p++;
                         } else if (*p) {
-                            current_token[pos++] = *p++; // Literal backslash + char
+                            current_token[pos++] = *p++;
                         }
                     } else if (*p == '$' || *p == '`') {
                         p = parse_expansion(p, current_token, &pos, MAX_TOKEN_LEN, 1);
@@ -107,25 +98,22 @@ void tokenize(const char *input, char **tokens, int *token_count) {
                     current_token[pos++] = *p++;
                 } else {
                     fprintf(stderr, "Error: Unmatched double quote\n");
-                    return; // Undefined result
+                    return;
                 }
                 continue;
             }
         }
 
-        // Rule 4: Expansions (outside quotes)
         if ((*p == '$' || *p == '`') && !in_word) {
             if (!in_word) in_word = 1;
             p = parse_expansion(p, current_token, &pos, MAX_TOKEN_LEN, 0);
             continue;
         }
 
-        // Rule 6: Blank
         if (isspace(*p)) {
             if (in_word) {
                 current_token[pos] = '\0';
                 strncpy(tokens[*token_count], current_token, MAX_TOKEN_LEN);
-                tokens[*token_count][MAX_TOKEN_LEN - 1] = '\0';
                 (*token_count)++;
                 pos = 0;
                 in_word = 0;
@@ -134,7 +122,6 @@ void tokenize(const char *input, char **tokens, int *token_count) {
             continue;
         }
 
-        // Rule 5 & 2: Operator
         if (is_operator_start(*p)) {
             if (in_word) {
                 current_token[pos] = '\0';
@@ -144,7 +131,7 @@ void tokenize(const char *input, char **tokens, int *token_count) {
                 in_word = 0;
             }
             current_token[pos++] = *p++;
-            if (*p && is_operator_start(*p)) { // Multi-char operator
+            if (*p && is_operator_start(*p)) {
                 current_token[pos++] = *p++;
             }
             current_token[pos] = '\0';
@@ -153,12 +140,11 @@ void tokenize(const char *input, char **tokens, int *token_count) {
                 (*token_count)++;
                 pos = 0;
             } else {
-                pos = 0; // Reset if not valid
+                pos = 0;
             }
             continue;
         }
 
-        // Rule 7 & 9: Word
         if (!in_word) in_word = 1;
         if (pos < MAX_TOKEN_LEN - 1) {
             current_token[pos++] = *p++;
@@ -171,11 +157,29 @@ void tokenize(const char *input, char **tokens, int *token_count) {
         }
     }
 
-    // Delimit final token
     if (in_word) {
         current_token[pos] = '\0';
         strncpy(tokens[*token_count], current_token, MAX_TOKEN_LEN);
         (*token_count)++;
+    }
+
+    // Alias substitution for the first token (command name)
+    if (*token_count > 0) {
+        char alias_value[MAX_TOKEN_LEN];
+        if (substitute_alias(tokens[0], alias_value, MAX_TOKEN_LEN)) {
+            // Replace first token with alias value
+            strncpy(tokens[0], alias_value, MAX_TOKEN_LEN);
+            tokens[0][MAX_TOKEN_LEN - 1] = '\0';
+
+            // Check if alias ends in blank and substitute next word
+            int len = strlen(alias_value);
+            if (len > 0 && isspace(alias_value[len - 1]) && *token_count > 1) {
+                if (substitute_alias(tokens[1], alias_value, MAX_TOKEN_LEN)) {
+                    strncpy(tokens[1], alias_value, MAX_TOKEN_LEN);
+                    tokens[1][MAX_TOKEN_LEN - 1] = '\0';
+                }
+            }
+        }
     }
 }
 
@@ -184,7 +188,7 @@ static const char *parse_expansion(const char *input, char *token, int *pos, int
 
     if (*p == '$') {
         token[(*pos)++] = *p++;
-        if (*p == '{') { // ${NAME}
+        if (*p == '{') {
             token[(*pos)++] = *p++;
             int brace_count = 1;
             while (*p && brace_count > 0) {
@@ -200,7 +204,7 @@ static const char *parse_expansion(const char *input, char *token, int *pos, int
             if (brace_count != 0) {
                 fprintf(stderr, "Error: Unmatched brace in ${}\n");
             }
-        } else if (*p == '(') { // $(cmd)
+        } else if (*p == '(') {
             token[(*pos)++] = *p++;
             int paren_count = 1;
             while (*p && paren_count > 0) {
@@ -218,10 +222,10 @@ static const char *parse_expansion(const char *input, char *token, int *pos, int
             if (paren_count != 0) {
                 fprintf(stderr, "Error: Unmatched parenthesis in $()\n");
             }
-        } else { // $NAME
+        } else {
             while (*p && (isalnum(*p) || *p == '_')) token[(*pos)++] = *p++;
         }
-    } else if (*p == '`') { // `cmd`
+    } else if (*p == '`') {
         token[(*pos)++] = *p++;
         while (*p && *p != '`') {
             if (*p == '\\' && p[1]) {

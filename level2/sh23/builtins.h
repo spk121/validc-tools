@@ -13,6 +13,7 @@ void builtin_set(int argc, char **argv);
 void builtin_shift(int n);
 void builtin_unset(const char *name);
 void builtin_alias(const char *name, const char *value);
+void builtin_unalias(const char *name);
 void builtin_getopts(void);
 void builtin_read(const char *varname);
 void builtin_dot(const char *filename);
@@ -22,5 +23,6 @@ void builtin_test(const char *expr);
 void builtin_type(const char *name);
 void builtin_echo(const char *args);
 void builtin_showvars(void);
+int substitute_alias(char *token, char *output, int max_len);
 
 #endif
