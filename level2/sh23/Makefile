@@ -1,5 +1,5 @@
 CC = gcc
-CFLAGS = -Wall -std=c23
+CFLAGS = -Wall -std=c23 -I../c23lib
 OBJS = main.o execute.o variables.o builtins.o parser.o control.o functions.o utils.o
 
 sh23: $(OBJS)

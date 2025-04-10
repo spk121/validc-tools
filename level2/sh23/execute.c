@@ -5,12 +5,17 @@
 #include "execute.h"
 #include "builtins.h"
 #include "variables.h"
+#include "logging.h"
 
 #define MAX_CMD 1024
 
 static int last_status = 0; // Store last command status
 
-void expand_command(const char *cmd, char *out) {
+void expand_command(VariableStore *var_store, const char *cmd, char *out) {
+    return_if_null (var_store);
+    return_if_null (cmd);
+    return_if_null (out);
+
     char *out_ptr = out;
     out[0] = '\0';
 
@@ -32,7 +37,7 @@ void expand_command(const char *cmd, char *out) {
                 }
             }
             var_name[i] = '\0';
-            const char *value = get_variable(var_name);
+            const char *value = variable_store_get_variable(var_store, var_name);
             strncat(out_ptr, value, MAX_CMD - (out_ptr - out) - 1);
             out_ptr += strlen(value);
         } else {
@@ -88,13 +93,15 @@ void execute_script(const char *filename) {
     fclose(file);
 }
 
-int execute_command(const char *cmd) {
+int execute_command(VariableStore *var_store, const char *cmd) {
+    return_val_if_null (var_store, 1);
+
     if (cmd[0] == '\0') {
         last_status = 0;
         return 0;
     }
     char expanded[MAX_CMD];
-    expand_command(cmd, expanded);
+    expand_command(var_store, cmd, expanded);
 
     if (expanded[0] == '\0') {
         last_status = 0;
@@ -117,7 +124,7 @@ int execute_command(const char *cmd) {
             *eq = '\0';
             char *name = arg;
             char *value = eq + 1;
-            set_variable(name, value);
+            variable_store_set_variable(var_store, name, value);
             builtin_export(name);
         } else if (*arg) {
             builtin_export(arg);

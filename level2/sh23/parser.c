@@ -5,6 +5,8 @@
 #include "parser.h"
 #include "builtins.h"
 
+ParserState *current_parser_state = NULL;
+
 static const char *operators[] = {
     "&&", "||", ";;", "<<", ">>", "<&", ">&", "<>", "<<-", ">|", "<", ">", "|", ";", "&", "(", ")", NULL
 };
@@ -1098,15 +1100,27 @@ ParseStatus parse_line(const char *line, ParserState *state, ASTNode **ast) {
     return PARSE_COMPLETE;
 }
 
-void init_environment(Environment *env) {
+void init_environment(Environment *env, const char *shell_name, int argc, char *argv[]) {
     env->var_capacity = 16;
     env->variables = malloc(env->var_capacity * sizeof(char *));
     env->var_count = 0;
+    env->shell_name = strdup(shell_name ? shell_name : "sh23");
+    env->arg_count = argc > 0 ? argc - 1 : 0; // Exclude program name
+    env->args = NULL;
+    if (env->arg_count > 0) {
+        env->args = malloc(env->arg_count * sizeof(char *));
+        for (int i = 0; i < env->arg_count; i++) {
+            env->args[i] = strdup(argv[i + 1]); // Copy argv[1] and up
+        }
+    }
 }
 
 void free_environment(Environment *env) {
-    for (int i = 0; i < env->var_count; i++) free(env->variables[i]);
+    for (int i = 0; i < env->var_count; i++) free(env->variables[i].name);
     free(env->variables);
+    free(env->shell_name);
+    for (int i = 0; i < env->arg_count; i++) free(env->args[i]);
+    free(env->args);
 }
 
 char *expand_tilde(const char *value) {
@@ -1116,9 +1130,29 @@ char *expand_tilde(const char *value) {
     return strdup(value ? value : "");
 }
 
-char *expand_parameter(const char *value, Environment *env) {
+static char *expand_parameter(const char *value, Environment *env, int *last_exit_status) {
     if (!value || value[0] != '$') return strdup(value ? value : "");
     const char *var_name = value + 1;
+    if (strcmp(var_name, "?") == 0) {
+        char status_str[16];
+        snprintf(status_str, sizeof(status_str), "%d", *last_exit_status);
+        return strdup(status_str);
+    }
+    if (strcmp(var_name, "0") == 0) {
+        return strdup(env->shell_name);
+    }
+    if (strcmp(var_name, "#") == 0) {
+        char count_str[16];
+        snprintf(count_str, sizeof(count_str), "%d", env->arg_count);
+        return strdup(count_str);
+    }
+    if (strlen(var_name) == 1 && var_name[0] >= '1' && var_name[0] <= '9') {
+        int index = var_name[0] - '1'; // Convert '1' to 0, '2' to 1, etc.
+        if (index < env->arg_count) {
+            return strdup(env->args[index]);
+        }
+        return strdup(""); // Empty string if beyond arg_count
+    }
     if (var_name[0] == '{') {
         var_name++;
         const char *end = strchr(var_name, '}');
@@ -1134,9 +1168,11 @@ char *expand_parameter(const char *value, Environment *env) {
     return strdup(val ? val : "");
 }
 
+
 char *expand_command_substitution(const char *value, Environment *env, FunctionTable *ft, int *last_exit_status) {
     if (!value || (strncmp(value, "$(", 2) != 0 && value[0] != '`')) return strdup(value ? value : "");
 
+#if 0
     char command[MAX_COMMAND_LEN];
     const char *start = value;
     const char *end;
@@ -1186,6 +1222,9 @@ char *expand_command_substitution(const char *value, Environment *env, FunctionT
     if (nl) *nl = '\0';
 
     return strdup(result);
+#else
+    abort();
+#endif
 }
 
 char *expand_arithmetic(const char *value, Environment *env) {
@@ -1269,7 +1308,7 @@ char *expand_assignment(const char *assignment, Environment *env, FunctionTable 
 
     if (strchr(expanded, '$') && strncmp(expanded, "$((", 3) != 0) {
         free(expanded);
-        expanded = expand_parameter(temp, env);
+        expanded = expand_parameter(temp, env, last_exit_status);
         free(temp);
         temp = expanded;
     }
@@ -1308,9 +1347,9 @@ void set_variable(Environment *env, const char *assignment) {
         value = "";
     }
     for (int i = 0; i < env->var_count; i++) {
-        if (strncmp(env->variables[i], name, strlen(name)) == 0 && env->variables[i][strlen(name)] == '=') {
-            free(env->variables[i]);
-            env->variables[i] = strdup(expanded);
+        if (strncmp(env->variables[i].name, name, strlen(name)) == 0 && env->variables[i].name[strlen(name)] == '=') {
+            free(env->variables[i].name);
+            env->variables[i].name = strdup(expanded);
             free(name);
             free(expanded);
             return;
@@ -1320,7 +1359,7 @@ void set_variable(Environment *env, const char *assignment) {
         env->var_capacity *= 2;
         env->variables = realloc(env->variables, env->var_capacity * sizeof(char *));
     }
-    env->variables[env->var_count] = strdup(expanded);
+    env->variables[env->var_count].name = strdup(expanded);
     env->var_count++;
     free(name);
     free(expanded);
@@ -1328,11 +1367,54 @@ void set_variable(Environment *env, const char *assignment) {
 
 const char *get_variable(Environment *env, const char *name) {
     for (int i = 0; i < env->var_count; i++) {
-        if (strncmp(env->variables[i], name, strlen(name)) == 0 && env->variables[i][strlen(name)] == '=') {
-            return env->variables[i] + strlen(name) + 1;
+        if (strncmp(env->variables[i].name, name, strlen(name)) == 0 && env->variables[i].name[strlen(name)] == '=') {
+            return env->variables[i].name + strlen(name) + 1;
         }
     }
     return NULL;
+}
+
+void export_variable(Environment *env, const char *name) {
+    for (int i = 0; i < env->var_count; i++) {
+        if (strcmp(env->variables[i].name, name) == 0) {
+            env->variables[i].exported = 1;
+            return;
+        }
+    }
+    // If not found, add it with an empty value
+    if (env->var_count >= env->var_capacity) {
+        env->var_capacity *= 2;
+        env->variables = realloc(env->variables, env->var_capacity * sizeof(Variable));
+    }
+    env->variables[env->var_count].name = strdup(name);
+    env->variables[env->var_count].value = strdup("");
+    env->variables[env->var_count].exported = 1;
+    env->var_count++;
+}
+
+void unset_variable(Environment *env, const char *name) {
+    for (int i = 0; i < env->var_count; i++) {
+        if (strcmp(env->variables[i].name, name) == 0) {
+            free(env->variables[i].name);
+            free(env->variables[i].value);
+            for (int j = i; j < env->var_count - 1; j++) {
+                env->variables[j] = env->variables[j + 1];
+            }
+            env->var_count--;
+            return;
+        }
+    }
+}
+
+void show_variables(Environment *env) {
+    if (env->var_count == 0) {
+        printf("No variables set.\n");
+        return;
+    }
+    for (int i = 0; i < env->var_count; i++) {
+        printf("%s%s=%s\n", env->variables[i].exported ? "export " : "",
+               env->variables[i].name, env->variables[i].value);
+    }
 }
 
 void init_function_table(FunctionTable *ft) {
@@ -1400,16 +1482,6 @@ Redirect *get_function_redirects(FunctionTable *ft, const char *name) {
     return NULL;
 }
 
-void show_variables(Environment *env) {
-    if (env->var_count == 0) {
-        printf("No variables set.\n");
-        return;
-    }
-    for (int i = 0; i < env->var_count; i++) {
-        printf("%s\n", env->variables[i]);
-    }
-}
-
 char *get_shebang_interpreter(const char *filename) {
     FILE *file = fopen(filename, "r");
     if (!file) return NULL;
@@ -1442,53 +1514,140 @@ int has_redirects(Redirect *redirects) {
     return redirects != NULL;
 }
 
-int execute_simple_command(ASTNode *node, Environment *env, FunctionTable *ft, int *last_exit_status) {
-    for (int i = 0; i < node->data.simple_command.prefix_count; i++) {
-        set_variable(env, node->data.simple_command.prefix[i]);
-    }
-    if (!node->data.simple_command.command) return 0;
+ExecStatus execute_ast(ASTNode *node, Environment *env, FunctionTable *ft, int *last_exit_status) {
+    if (!node) return EXEC_NORMAL;
 
-    if (strcmp(node->data.simple_command.command, "%showvars") == 0) {
-        show_variables(env);
-        return 0;
-    }
-
-    if (has_redirects(node->data.simple_command.redirects)) {
-        fprintf(stderr, "Error: I/O redirection not supported in C23\n");
-        return 1;
-    }
-
-    ASTNode *func_body = get_function_body(ft, node->data.simple_command.command);
-    if (func_body) {
-        if (has_redirects(get_function_redirects(ft, node->data.simple_command.command))) {
-            fprintf(stderr, "Error: Function %s uses unsupported I/O redirection\n", node->data.simple_command.command);
-            return 1;
+    switch (node->type) {
+        case AST_SIMPLE_COMMAND:
+            return execute_simple_command(node, env, ft, last_exit_status);
+        case AST_PIPELINE: {
+            int bang = node->data.pipeline.bang;
+            for (int i = 0; i < node->data.pipeline.command_count; i++) {
+                ExecStatus status = execute_ast(node->data.pipeline.commands[i], env, ft, last_exit_status);
+                if (status == EXEC_RETURN) return EXEC_RETURN;
+            }
+            if (bang) *last_exit_status = !(*last_exit_status);
+            return EXEC_NORMAL;
         }
-        execute_ast(func_body, env, ft, last_exit_status);
-        return *last_exit_status;
+        case AST_AND_OR: {
+            ExecStatus left_status = execute_ast(node->data.and_or.left, env, ft, last_exit_status);
+            if (left_status == EXEC_RETURN) return EXEC_RETURN;
+            int execute_right = (node->data.and_or.operator == AND_IF && *last_exit_status == 0) ||
+                                (node->data.and_or.operator == OR_IF && *last_exit_status != 0);
+            if (execute_right) {
+                return execute_ast(node->data.and_or.right, env, ft, last_exit_status);
+            }
+            return EXEC_NORMAL;
+        }
+        case AST_LIST: {
+            ExecStatus status = execute_ast(node->data.list.and_or, env, ft, last_exit_status);
+            if (status == EXEC_RETURN) return EXEC_RETURN;
+            if (node->data.list.next) {
+                return execute_ast(node->data.list.next, env, ft, last_exit_status);
+            }
+            return EXEC_NORMAL;
+        }
+        case AST_COMPLETE_COMMAND:
+            return execute_ast(node->data.complete_command.list, env, ft, last_exit_status);
+        case AST_PROGRAM:
+            return execute_ast(node->data.program.commands, env, ft, last_exit_status);
+        case AST_FUNCTION_DEFINITION: {
+            for (int i = 0; i < ft->func_count; i++) {
+                if (strcmp(ft->functions[i].name, node->data.function_definition.name) == 0) {
+                    free(ft->functions[i].name);
+                    free_ast(ft->functions[i].body);
+                    Redirect *redir = ft->functions[i].redirects;
+                    while (redir) {
+                        Redirect *next = redir->next;
+                        free(redir->io_number);
+                        free(redir->filename);
+                        free(redir);
+                        redir = next;
+                    }
+                    ft->functions[i] = ft->functions[ft->func_count - 1];
+                    ft->func_count--;
+                    break;
+                }
+            }
+            if (ft->func_count >= ft->func_capacity) {
+                ft->func_capacity *= 2;
+                ft->functions = realloc(ft->functions, ft->func_capacity * sizeof(FunctionEntry));
+            }
+            ft->functions[ft->func_count].name = strdup(node->data.function_definition.name);
+            ft->functions[ft->func_count].body = node->data.function_definition.body;
+            ft->functions[ft->func_count].redirects = node->data.function_definition.redirects;
+            ft->functions[ft->func_count].active = 0;
+            ft->func_count++;
+            *last_exit_status = 0;
+            return EXEC_NORMAL;
+        }
+        case AST_IF_CLAUSE:
+            execute_ast(node->data.if_clause.condition, env, ft, last_exit_status);
+            if (*last_exit_status == 0) {
+                execute_ast(node->data.if_clause.then_body, env, ft, last_exit_status);
+            } else if (node->data.if_clause.else_part) {
+                execute_ast(node->data.if_clause.else_part, env, ft, last_exit_status);
+            }
+            break;
+        case AST_FOR_CLAUSE:
+            for (int i = 0; i < node->data.for_clause.wordlist_count; i++) {
+                char *assignment = malloc(strlen(node->data.for_clause.variable) + strlen(node->data.for_clause.wordlist[i]) + 2);
+                sprintf(assignment, "%s=%s", node->data.for_clause.variable, node->data.for_clause.wordlist[i]);
+                set_variable(env, assignment);
+                free(assignment);
+                execute_ast(node->data.for_clause.body, env, ft, last_exit_status);
+            }
+            break;
+        case AST_CASE_CLAUSE:
+            {
+                char *word = expand_assignment(node->data.case_clause.word, env, ft, last_exit_status);
+                char *equals = strchr(word, '=');
+                if (equals) *equals = '\0';
+                CaseItem *item = node->data.case_clause.items;
+                while (item) {
+                    for (int i = 0; i < item->pattern_count; i++) {
+                        if (strcmp(equals ? equals + 1 : word, item->patterns[i]) == 0) {
+                            if (item->action) execute_ast(item->action, env, ft, last_exit_status);
+                            free(word);
+                            return EXEC_NORMAL;
+                        }
+                    }
+                    item = item->next;
+                }
+                free(word);
+            }
+            break;
+        case AST_WHILE_CLAUSE:
+            while (1) {
+                execute_ast(node->data.while_clause.condition, env, ft, last_exit_status);
+                if (*last_exit_status != 0) break;
+                execute_ast(node->data.while_clause.body, env, ft, last_exit_status);
+            }
+            break;
+        case AST_UNTIL_CLAUSE:
+            while (1) {
+                execute_ast(node->data.until_clause.condition, env, ft, last_exit_status);
+                if (*last_exit_status == 0) break;
+                execute_ast(node->data.until_clause.body, env, ft, last_exit_status);
+            }
+            break;
+        case AST_BRACE_GROUP:
+            execute_ast(node->data.brace_group.body, env, ft, last_exit_status);
+            break;
+        case AST_SUBSHELL:
+            execute_ast(node->data.subshell.body, env, ft, last_exit_status);
+            break;
+        case AST_IO_REDIRECT:
+            fprintf(stderr, "Error: Standalone I/O redirection not supported in C23\n");
+            *last_exit_status = 1;
+            break;
+        default:
+            *last_exit_status = 1;
+            return EXEC_NORMAL;
     }
-
-    char command[MAX_COMMAND_LEN] = {0};
-    char *interpreter = get_shebang_interpreter(node->data.simple_command.command);
-    if (interpreter) {
-        strncat(command, interpreter, MAX_COMMAND_LEN - strlen(command) - 1);
-        strncat(command, " ", MAX_COMMAND_LEN - strlen(command) - 1);
-        free(interpreter);
-    }
-    strncat(command, node->data.simple_command.command, MAX_COMMAND_LEN - strlen(command) - 1);
-    for (int i = 0; i < node->data.simple_command.suffix_count; i++) {
-        char *expanded = expand_assignment(node->data.simple_command.suffix[i], env, ft, last_exit_status);
-        char *equals = strchr(expanded, '=');
-        if (equals) *equals = '\0';
-        strncat(command, " ", MAX_COMMAND_LEN - strlen(command) - 1);
-        strncat(command, equals ? equals + 1 : expanded, MAX_COMMAND_LEN - strlen(command) - 1);
-        free(expanded);
-    }
-
-    *last_exit_status = system(command);
-    return *last_exit_status;
 }
 
+#if 0
 void execute_ast(ASTNode *ast, Environment *env, FunctionTable *ft, int *last_exit_status) {
     if (!ast) return;
 
@@ -1602,6 +1761,7 @@ void execute_ast(ASTNode *ast, Environment *env, FunctionTable *ft, int *last_ex
             break;
     }
 }
+#endif
 
 void free_ast(ASTNode *node) {
     if (!node) return;
@@ -1833,3 +1993,552 @@ void print_ast(ASTNode *node, int depth) {
             break;
     }
 }
+
+
+
+// Forward declaration for recursive evaluation
+static int evaluate_expression(int argc, char **argv, int start, int end, int *last_exit_status);
+
+// Helper to evaluate a single test (no logical operators)
+static int evaluate_single_test(int argc, char **argv, int *last_exit_status) {
+    if (argc == 1) {
+        return strlen(argv[0]) == 0 ? 1 : 0; // True if non-empty string
+    }
+    if (argc == 2) {
+        if (strcmp(argv[0], "-n") == 0) return strlen(argv[1]) > 0 ? 0 : 1;
+        if (strcmp(argv[0], "-z") == 0) return strlen(argv[1]) == 0 ? 0 : 1;
+        if (strcmp(argv[0], "-e") == 0) {
+            FILE *f = fopen(argv[1], "r");
+            if (f) {
+                fclose(f);
+                return 0;
+            }
+            return 1;
+        }
+        if (strcmp(argv[0], "-r") == 0) {
+            FILE *f = fopen(argv[1], "r");
+            if (f) {
+                fclose(f);
+                return 0;
+            }
+            return 1;
+        }
+        if (strcmp(argv[0], "-w") == 0) {
+            FILE *f = fopen(argv[1], "r+");
+            if (f) {
+                fclose(f);
+                return 0;
+            }
+            f = fopen(argv[1], "w");
+            if (f) {
+                fclose(f);
+                remove(argv[1]);
+                return 0;
+            }
+            return 1;
+        }
+        if (argv[0][0] == '-' && strchr("bcdfghkLpsSux", argv[0][1])) {
+            fprintf(stderr, "test: %s: file type tests not supported in C23\n", argv[0]);
+            return 2;
+        }
+        fprintf(stderr, "test: %s: unknown unary operator\n", argv[0]);
+        return 2;
+    }
+    if (argc == 3) {
+        if (strcmp(argv[1], "=") == 0) return strcmp(argv[0], argv[2]) == 0 ? 0 : 1;
+        if (strcmp(argv[1], "!=") == 0) return strcmp(argv[0], argv[2]) != 0 ? 0 : 1;
+
+        char *endptr1, *endptr2;
+        long n1 = strtol(argv[0], &endptr1, 10);
+        long n2 = strtol(argv[2], &endptr2, 10);
+        if (*endptr1 == '\0' && *endptr2 == '\0') {
+            if (strcmp(argv[1], "-eq") == 0) return n1 == n2 ? 0 : 1;
+            if (strcmp(argv[1], "-ne") == 0) return n1 != n2 ? 0 : 1;
+            if (strcmp(argv[1], "-lt") == 0) return n1 < n2 ? 0 : 1;
+            if (strcmp(argv[1], "-gt") == 0) return n1 > n2 ? 0 : 1;
+            if (strcmp(argv[1], "-le") == 0) return n1 <= n2 ? 0 : 1;
+            if (strcmp(argv[1], "-ge") == 0) return n1 >= n2 ? 0 : 1;
+        }
+        fprintf(stderr, "test: %s: unknown binary operator or invalid operands\n", argv[1]);
+        return 2;
+    }
+    fprintf(stderr, "test: invalid single test expression\n");
+    return 2;
+}
+
+// Evaluate expression with logical operators
+static int evaluate_expression(int argc, char **argv, int start, int end, int *last_exit_status) {
+    if (start >= end) return 1; // Empty expression is false
+
+    int paren_depth = 0;
+    int or_pos = -1;
+    int and_pos = -1;
+
+    // Scan for operators outside parentheses
+    for (int i = start; i < end; i++) {
+        if (strcmp(argv[i], "(") == 0) paren_depth++;
+        else if (strcmp(argv[i], ")") == 0) paren_depth--;
+        else if (paren_depth == 0) {
+            if (strcmp(argv[i], "-o") == 0 && or_pos == -1) or_pos = i;
+            else if (strcmp(argv[i], "-a") == 0) and_pos = i;
+        }
+    }
+    if (paren_depth != 0) {
+        fprintf(stderr, "test: unmatched parentheses\n");
+        return 2;
+    }
+
+    // Handle ! (highest precedence)
+    if (start < end && strcmp(argv[start], "!") == 0) {
+        int sub_result = evaluate_expression(argc, argv, start + 1, end, last_exit_status);
+        return sub_result == 0 ? 1 : (sub_result == 1 ? 0 : 2);
+    }
+
+    // Handle parentheses
+    if (start < end && strcmp(argv[start], "(") == 0) {
+        int paren_end = start;
+        int depth = 1;
+        while (paren_end + 1 < end && depth > 0) {
+            paren_end++;
+            if (strcmp(argv[paren_end], "(") == 0) depth++;
+            else if (strcmp(argv[paren_end], ")") == 0) depth--;
+        }
+        if (depth != 0 || paren_end >= end) {
+            fprintf(stderr, "test: unmatched parentheses\n");
+            return 2;
+        }
+        int sub_result = evaluate_expression(argc, argv, start + 1, paren_end, last_exit_status);
+        if (sub_result == 2) return 2;
+        if (paren_end + 1 == end) return sub_result;
+        if (strcmp(argv[paren_end + 1], "-a") == 0) {
+            int right_result = evaluate_expression(argc, argv, paren_end + 2, end, last_exit_status);
+            return (sub_result == 0 && right_result == 0) ? 0 : (sub_result == 2 || right_result == 2 ? 2 : 1);
+        }
+        if (strcmp(argv[paren_end + 1], "-o") == 0) {
+            int right_result = evaluate_expression(argc, argv, paren_end + 2, end, last_exit_status);
+            return (sub_result == 0 || right_result == 0) ? 0 : (sub_result == 2 || right_result == 2 ? 2 : 1);
+        }
+        fprintf(stderr, "test: invalid expression after parentheses\n");
+        return 2;
+    }
+
+    // Handle -o (lowest precedence)
+    if (or_pos != -1) {
+        int left_result = evaluate_expression(argc, argv, start, or_pos, last_exit_status);
+        if (left_result == 0) return 0; // Short-circuit OR
+        if (left_result == 2) return 2;
+        int right_result = evaluate_expression(argc, argv, or_pos + 1, end, last_exit_status);
+        return (left_result == 0 || right_result == 0) ? 0 : (right_result == 2 ? 2 : 1);
+    }
+
+    // Handle -a
+    if (and_pos != -1) {
+        int left_result = evaluate_expression(argc, argv, start, and_pos, last_exit_status);
+        if (left_result == 1) return 1; // Short-circuit AND
+        if (left_result == 2) return 2;
+        int right_result = evaluate_expression(argc, argv, and_pos + 1, end, last_exit_status);
+        return (left_result == 0 && right_result == 0) ? 0 : (right_result == 2 ? 2 : 1);
+    }
+
+    // No logical operators, evaluate as single test
+    char *sub_args[end - start + 1];
+    for (int i = start; i < end; i++) sub_args[i - start] = argv[i];
+    return evaluate_single_test(end - start, sub_args, last_exit_status);
+}
+
+static int evaluate_test(int argc, char **argv, int *last_exit_status) {
+    if (argc == 0) return 1; // No args
+
+    int expect_bracket = (strcmp(argv[0], "[") == 0);
+    if (expect_bracket && (argc < 2 || strcmp(argv[argc - 1], "]") != 0)) {
+        fprintf(stderr, "%s: missing ']'\n", argv[0]);
+        return 2;
+    }
+    int start = 1;
+    int end = expect_bracket ? argc - 1 : argc;
+    return evaluate_expression(argc, argv, start, end, last_exit_status);
+}
+
+// Helper function to get PATH or default
+static const char *get_path(Environment *env) {
+    const char *path = get_variable(env, "PATH");
+    return path ? path : "/bin:/usr/bin"; // Default PATH if unset
+}
+
+// Helper function to search PATH for a file
+static char *find_file_in_path(const char *filename, const char *path) {
+    if (strchr(filename, '/')) { // Absolute or relative path
+        FILE *file = fopen(filename, "r");
+        if (file) {
+            fclose(file);
+            return strdup(filename);
+        }
+        return NULL;
+    }
+
+    char *path_copy = strdup(path);
+    char *token = strtok(path_copy, ":");
+    char full_path[MAX_COMMAND_LEN];
+
+    while (token) {
+        snprintf(full_path, sizeof(full_path), "%s/%s", token, filename);
+        FILE *file = fopen(full_path, "r");
+        if (file) {
+            fclose(file);
+            free(path_copy);
+            return strdup(full_path);
+        }
+        token = strtok(NULL, ":");
+    }
+    free(path_copy);
+    return NULL;
+}
+
+ExecStatus execute_simple_command(ASTNode *node, Environment *env, FunctionTable *ft, int *last_exit_status) {
+    for (int i = 0; i < node->data.simple_command.prefix_count; i++) {
+        set_variable(env, node->data.simple_command.prefix[i]);
+    }
+    if (!node->data.simple_command.command) return EXEC_NORMAL;
+
+    if (strcmp(node->data.simple_command.command, "%showvars") == 0) {
+        show_variables(env);
+        *last_exit_status = 0;
+        return EXEC_NORMAL;
+    }
+    if (strcmp(node->data.simple_command.command, "export") == 0) {
+        if (node->data.simple_command.suffix_count == 0) {
+            show_variables(env);
+        } else {
+            for (int i = 0; i < node->data.simple_command.suffix_count; i++) {
+                char *arg = expand_assignment(node->data.simple_command.suffix[i], env, ft, last_exit_status);
+                char *equals = strchr(arg, '=');
+                if (equals) {
+                    *equals = '\0';
+                    set_variable(env, node->data.simple_command.suffix[i]);
+                    export_variable(env, arg);
+                } else {
+                    export_variable(env, arg);
+                }
+                free(arg);
+            }
+        }
+        *last_exit_status = 0;
+        return EXEC_NORMAL;
+    }
+    if (strcmp(node->data.simple_command.command, "unset") == 0) {
+        if (node->data.simple_command.suffix_count == 0) {
+            fprintf(stderr, "unset: missing argument\n");
+            *last_exit_status = 1;
+            return EXEC_NORMAL;
+        }
+        for (int i = 0; i < node->data.simple_command.suffix_count; i++) {
+            char *arg = expand_assignment(node->data.simple_command.suffix[i], env, ft, last_exit_status);
+            char *equals = strchr(arg, '=');
+            if (equals) *equals = '\0';
+            unset_variable(env, arg);
+            free(arg);
+        }
+        *last_exit_status = 0;
+        return EXEC_NORMAL;
+    }
+    if (strcmp(node->data.simple_command.command, "echo") == 0) {
+        int newline = 1;
+        int start_idx = 0;
+
+        if (node->data.simple_command.suffix_count > 0) {
+            char *first_arg = expand_assignment(node->data.simple_command.suffix[0], env, ft, last_exit_status);
+            char *equals = strchr(first_arg, '=');
+            if (equals) *equals = '\0';
+            if (strcmp(first_arg, "-n") == 0) {
+                newline = 0;
+                start_idx = 1;
+            }
+            free(first_arg);
+        }
+
+        for (int i = start_idx; i < node->data.simple_command.suffix_count; i++) {
+            char *arg = expand_assignment(node->data.simple_command.suffix[i], env, ft, last_exit_status);
+            char *equals = strchr(arg, '=');
+            if (equals) *equals = '\0';
+            printf("%s", equals ? equals + 1 : arg);
+            if (i < node->data.simple_command.suffix_count - 1) printf(" ");
+            free(arg);
+        }
+        if (newline) printf("\n");
+        fflush(stdout);
+        *last_exit_status = 0;
+        return EXEC_NORMAL;
+    }
+    if (strcmp(node->data.simple_command.command, "exit") == 0) {
+        int exit_status = *last_exit_status;
+        if (node->data.simple_command.suffix_count > 1) {
+            fprintf(stderr, "exit: too many arguments\n");
+            *last_exit_status = 1;
+            return EXEC_NORMAL;
+        }
+        if (node->data.simple_command.suffix_count == 1) {
+            char *arg = expand_assignment(node->data.simple_command.suffix[0], env, ft, last_exit_status);
+            char *equals = strchr(arg, '=');
+            if (equals) *equals = '\0';
+            char *endptr;
+            long status = strtol(arg, &endptr, 10);
+            if (*endptr != '\0' || arg == endptr) {
+                fprintf(stderr, "exit: numeric argument required\n");
+                free(arg);
+                exit(1);
+            }
+            exit_status = (int)(status & 0xFF);
+            free(arg);
+        }
+        exit(exit_status);
+    }
+    if (strcmp(node->data.simple_command.command, "cd") == 0) {
+        fprintf(stderr, "cd: changing directories is not implemented in C23\n");
+        *last_exit_status = 1;
+        return EXEC_NORMAL;
+    }
+    if (strcmp(node->data.simple_command.command, "shift") == 0) {
+        int shift_count = 1;
+        if (node->data.simple_command.suffix_count > 1) {
+            fprintf(stderr, "shift: too many arguments\n");
+            *last_exit_status = 1;
+            return EXEC_NORMAL;
+        }
+        if (node->data.simple_command.suffix_count == 1) {
+            char *arg = expand_assignment(node->data.simple_command.suffix[0], env, ft, last_exit_status);
+            char *equals = strchr(arg, '=');
+            if (equals) *equals = '\0';
+            char *endptr;
+            long n = strtol(arg, &endptr, 10);
+            if (*endptr != '\0' || arg == endptr || n < 0) {
+                fprintf(stderr, "shift: invalid number\n");
+                free(arg);
+                *last_exit_status = 1;
+                return EXEC_NORMAL;
+            }
+            shift_count = (int)n;
+            free(arg);
+        }
+        if (shift_count > env->arg_count) {
+            fprintf(stderr, "shift: shift count out of range\n");
+            *last_exit_status = 1;
+            return EXEC_NORMAL;
+        }
+        for (int i = 0; i < shift_count; i++) {
+            free(env->args[i]);
+        }
+        for (int i = 0; i < env->arg_count - shift_count; i++) {
+            env->args[i] = env->args[i + shift_count];
+        }
+        env->arg_count -= shift_count;
+        *last_exit_status = 0;
+        return EXEC_NORMAL;
+    }
+    if (strcmp(node->data.simple_command.command, ":") == 0) {
+        *last_exit_status = 0;
+        return EXEC_NORMAL;
+    }
+    if (strcmp(node->data.simple_command.command, ".") == 0) {
+        if (node->data.simple_command.suffix_count != 1) {
+            fprintf(stderr, ".: exactly one argument required\n");
+            *last_exit_status = 2;
+            return EXEC_NORMAL;
+        }
+        char *filename = expand_assignment(node->data.simple_command.suffix[0], env, ft, last_exit_status);
+        char *equals = strchr(filename, '=');
+        if (equals) *equals = '\0';
+
+        char *full_path = find_file_in_path(filename, get_path(env));
+        if (!full_path) {
+            fprintf(stderr, ".: %s: cannot open file\n", filename);
+            free(filename);
+            *last_exit_status = 2;
+            return EXEC_NORMAL;
+        }
+
+        FILE *file = fopen(full_path, "r");
+        if (!file) {
+            fprintf(stderr, ".: %s: cannot open file\n", full_path);
+            free(full_path);
+            free(filename);
+            *last_exit_status = 2;
+            return EXEC_NORMAL;
+        }
+
+        fseek(file, 0, SEEK_END);
+        long size = ftell(file);
+        fseek(file, 0, SEEK_SET);
+        char *buffer = malloc(size + 1);
+        if (!buffer) {
+            fprintf(stderr, ".: memory allocation failed\n");
+            fclose(file);
+            free(full_path);
+            free(filename);
+            *last_exit_status = 2;
+            return EXEC_NORMAL;
+        }
+        size_t read_size = fread(buffer, 1, size, file);
+        buffer[read_size] = '\0';
+        fclose(file);
+
+        ParserState script_state;
+        init_parser_state(&script_state);
+        script_state.in_dot_script = 1;
+        char *line = buffer;
+        char *next_line;
+        while (line && *line) {
+            next_line = strchr(line, '\n');
+            if (next_line) *next_line++ = '\0';
+            
+            ASTNode *ast = NULL;
+            ParseStatus status = parse_line(line, &script_state, &ast);
+            if (status == PARSE_COMPLETE && ast) {
+                ExecStatus exec_status = execute_ast(ast, env, ft, last_exit_status);
+                free_ast(ast);
+                if (exec_status == EXEC_RETURN) {
+                    free_parser_state(&script_state);
+                    free(buffer);
+                    free(full_path);
+                    free(filename);
+                    return EXEC_RETURN;
+                }
+            } else if (status == PARSE_ERROR) {
+                fprintf(stderr, ".: parse error in %s\n", full_path);
+                free_parser_state(&script_state);
+                free(buffer);
+                free(full_path);
+                free(filename);
+                *last_exit_status = 2;
+                return EXEC_NORMAL;
+            }
+            line = next_line;
+        }
+        free_parser_state(&script_state);
+        free(buffer);
+        free(full_path);
+        free(filename);
+        *last_exit_status = 0;
+        return EXEC_NORMAL;
+    }
+    if (strcmp(node->data.simple_command.command, "return") == 0) {
+        extern ParserState *current_parser_state;
+        int return_status = 0;
+        if (node->data.simple_command.suffix_count > 1) {
+            fprintf(stderr, "return: too many arguments\n");
+            *last_exit_status = 1;
+            return EXEC_NORMAL;
+        }
+        if (node->data.simple_command.suffix_count == 1) {
+            char *arg = expand_assignment(node->data.simple_command.suffix[0], env, ft, last_exit_status);
+            char *equals = strchr(arg, '=');
+            if (equals) *equals = '\0';
+            char *endptr;
+            long status = strtol(arg, &endptr, 10);
+            if (*endptr != '\0' || arg == endptr) {
+                fprintf(stderr, "return: numeric argument required\n");
+                *last_exit_status = 1;
+                free(arg);
+                return EXEC_NORMAL;
+            }
+            return_status = (int)(status & 0xFF);
+            free(arg);
+        } else {
+            return_status = *last_exit_status;
+        }
+
+        if (current_parser_state && (current_parser_state->in_function || current_parser_state->in_dot_script)) {
+            *last_exit_status = return_status;
+            return EXEC_RETURN;
+        } else {
+            exit(return_status);
+        }
+    }
+    if (strcmp(node->data.simple_command.command, "true") == 0) {
+        *last_exit_status = 0;
+        return EXEC_NORMAL;
+    }
+    if (strcmp(node->data.simple_command.command, "false") == 0) {
+        *last_exit_status = 1;
+        return EXEC_NORMAL;
+    }
+    if (strcmp(node->data.simple_command.command, "pwd") == 0) {
+        fprintf(stderr, "pwd: this shell has no ability to determine the working directory in C23\n");
+        *last_exit_status = 1;
+        return EXEC_NORMAL;
+    }
+    if (strcmp(node->data.simple_command.command, "test") == 0 || strcmp(node->data.simple_command.command, "[") == 0) {
+        int argc = 1 + node->data.simple_command.suffix_count;
+        char *argv[argc + 1];
+        argv[0] = node->data.simple_command.command;
+        for (int i = 0; i < node->data.simple_command.suffix_count; i++) {
+            argv[i + 1] = expand_assignment(node->data.simple_command.suffix[i], env, ft, last_exit_status);
+            char *equals = strchr(argv[i + 1], '=');
+            if (equals) *equals = '\0';
+        }
+        *last_exit_status = evaluate_test(argc, argv, last_exit_status);
+        for (int i = 1; i < argc; i++) free(argv[i]);
+        return EXEC_NORMAL;
+    }
+
+    if (has_redirects(node->data.simple_command.redirects)) {
+        fprintf(stderr, "Error: I/O redirection not supported in C23\n");
+        *last_exit_status = 1;
+        return EXEC_NORMAL;
+    }
+
+    ASTNode *func_body = get_function_body(ft, node->data.simple_command.command);
+    if (func_body) {
+        if (has_redirects(get_function_redirects(ft, node->data.simple_command.command))) {
+            fprintf(stderr, "Error: Function %s uses unsupported I/O redirection\n", node->data.simple_command.command);
+            *last_exit_status = 1;
+            return EXEC_NORMAL;
+        }
+        for (int i = 0; i < ft->func_count; i++) {
+            if (strcmp(ft->functions[i].name, node->data.simple_command.command) == 0) {
+                ft->functions[i].active = 1;
+                ParserState *prev_state = current_parser_state;
+                ParserState func_state;
+                init_parser_state(&func_state);
+                func_state.in_function = 1;
+                current_parser_state = &func_state;
+                ExecStatus status = execute_ast(func_body, env, ft, last_exit_status);
+                current_parser_state = prev_state;
+                ft->functions[i].active = 0;
+                free_parser_state(&func_state);
+                if (status == EXEC_RETURN) return EXEC_RETURN;
+                break;
+            }
+        }
+        return EXEC_NORMAL;
+    }
+
+    char command[MAX_COMMAND_LEN] = {0};
+    char *interpreter = get_shebang_interpreter(node->data.simple_command.command);
+    if (interpreter) {
+        strncat(command, interpreter, MAX_COMMAND_LEN - strlen(command) - 1);
+        strncat(command, " ", MAX_COMMAND_LEN - strlen(command) - 1);
+        free(interpreter);
+    }
+    strncat(command, node->data.simple_command.command, MAX_COMMAND_LEN - strlen(command) - 1);
+    for (int i = 0; i < node->data.simple_command.suffix_count; i++) {
+        char *expanded = expand_assignment(node->data.simple_command.suffix[i], env, ft, last_exit_status);
+        char *equals = strchr(expanded, '=');
+        if (equals) *equals = '\0';
+        strncat(command, " ", MAX_COMMAND_LEN - strlen(command) - 1);
+        strncat(command, equals ? equals + 1 : expanded, MAX_COMMAND_LEN - strlen(command) - 1);
+        free(expanded);
+    }
+
+    int status = system(command);
+    if (status == -1) {
+        perror("system failed");
+        *last_exit_status = -1;
+    } else if (status == 0) {
+        *last_exit_status = 0;
+    } else {
+        *last_exit_status = status & 0xFF;
+    }
+    return EXEC_NORMAL;
+}
+
+

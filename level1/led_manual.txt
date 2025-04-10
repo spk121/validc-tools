@@ -1,0 +1,147 @@
+LED MANUAL
+==========
+
+NAME
+    led - Lightweight line editor with POSIX ed-like functionality
+
+SYNOPSIS
+    led [FILE]
+
+DESCRIPTION
+    'led' is a simple, POSIX ed-like line editor implemented in C23. It operates
+    on a buffer of text lines, supporting basic editing commands, pattern matching
+    with POSIX Basic Regular Expressions (BRE), and multi-line addressing. If FILE
+    is provided, it loads the file into the buffer; otherwise, it starts with an
+    empty buffer. Commands are entered interactively, one per line.
+
+OPTIONS
+    FILE
+        Optional file to load into the buffer at startup. Prints the byte count
+        (including newlines) upon successful load.
+
+COMMANDS
+    'led' supports the following commands, where addresses specify lines (1-based)
+    in the buffer. Addresses can be:
+    - Number (e.g., "2" for line 2)
+    - "." (current line)
+    - "$" (last line)
+    - "/pattern/" (next line matching BRE pattern, searching from current line
+      with wrap-around)
+    Ranges are specified as "addr1,addr2" (e.g., "1,/foo/"). Invalid addresses or
+    ranges result in "?".
+
+    Single-line Commands:
+    [addr]a
+        Append text after the addressed line (or end if no address). Enter lines,
+        ending with "." on a new line. Sets current line to last appended line.
+
+    [addr]i
+        Insert text before the addressed line (or start if no address). Enter
+        lines, ending with "." on a new line. Sets current line to last inserted
+        line.
+
+    [addr]p
+        Print the addressed line (current line if no address). Sets current line
+        to the printed line.
+
+    [addr]d
+        Delete the addressed line (current line if no address). Sets current line
+        to the next line, or last line if at end.
+
+    /pattern/
+        Move to and print the next line matching the BRE pattern, searching from
+        the current line with wrap-around. Sets current line to the matched line.
+
+    [addr]s/pattern/replacement/
+        Substitute the first match of BRE pattern with replacement on the
+        addressed line (current line if no address). Supports \1 to \9 for
+        capture groups (e.g., s/\(foo\)/\1bar/). Sets current line to the
+        modified line.
+
+    w
+        Write the buffer to a file. Prompts for a filename, then prints the byte
+        count (including newlines). Clears the dirty flag.
+
+    q
+        Quit the editor. Prints "?" if there are unsaved changes; otherwise exits.
+
+    Range Commands:
+    addr1,addr2p
+        Print all lines from addr1 to addr2 inclusive. Sets current line to addr2.
+
+    addr1,addr2d
+        Delete all lines from addr1 to addr2 inclusive. Sets current line to the
+        next line after addr2, or last line if at end.
+
+    addr1,addr2s/pattern/replacement/
+        Substitute the first match of BRE pattern with replacement on each line
+        from addr1 to addr2 inclusive. Supports \1 to \9 for capture groups. Sets
+        current line to addr2.
+
+    Address-only:
+    addr
+        Set the current line to addr without action (e.g., "3" or "/foo/").
+
+BRE PATTERN SYNTAX
+    'led' uses POSIX Basic Regular Expressions (BRE) for /pattern/ and s commands:
+    - .        Match any single character
+    - *        Zero or more of the previous character or .
+    - ^        Start of line (in pattern start)
+    - $        End of line (in pattern end)
+    - [abc]    One of the listed characters
+    - [^abc]   Not one of the listed characters
+    - [a-z]    Range of characters
+    - \( \)    Capture group (up to 9 groups, referenced as \1 to \9)
+    Examples:
+    - /f.o/        Matches "foo" or "flo"
+    - s/\(f..\)/\1x/  Replaces "foo" with "foox"
+
+EXAMPLES
+    Load test.txt with "line one\nfoo here\nmiddle\nbar there\nline five":
+        $ led test.txt
+        31
+
+    Print lines 1 to first "foo":
+        1,/foo/p
+        line one
+        foo here
+
+    Substitute "foo" with "bar" on current line:
+        s/foo/bar/
+        p
+        bar here
+
+    Delete from start to "middle":
+        1,/middle/d
+        /bar/p
+        bar there
+
+    Replace "line" with "lineX" in all lines:
+        1,$s/\(line\)/\1X/
+        1,$p
+        bar there
+        lineX five
+        w
+        Enter filename: test.txt
+        18
+        q
+
+EXIT STATUS
+    0   Successful exit via 'q' with no unsaved changes
+    Non-zero  Abnormal termination (e.g., memory allocation failure)
+
+LIMITATIONS
+    - Maximum line length: 1023 characters
+    - No global substitution (e.g., s/.../.../g) yet
+    - No error recovery beyond printing "?"
+    - BRE lacks some escapes (e.g., \* as literal *)
+    - Range commands limited to p, d, s
+
+NOTES
+    - Lines are stored without trailing newlines; newlines are added on write.
+    - Current line defaults to 0 (none) initially, set to last line after load.
+    - Unsaved changes prevent quitting without warning (?).
+
+AUTHOR
+    Generated by Grok 3, built by xAI
+    Date: April 08, 2025

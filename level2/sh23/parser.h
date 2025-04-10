@@ -1,6 +1,8 @@
 #ifndef PARSER_H
 #define PARSER_H
 
+#include <stdbool.h>
+
 #define MAX_TOKENS 1024
 #define MAX_TOKEN_LEN 1024
 #define MAX_COMMAND_LEN 4096
@@ -116,6 +118,18 @@ typedef struct ASTNode {
 } ASTNode;
 
 typedef enum {
+    EXEC_NORMAL = 0,   // Normal execution
+    EXEC_RETURN = 1    // Return signaled (function or script)
+} ExecStatus;
+
+typedef struct {
+    char *name;
+    ASTNode *body;
+    Redirect *redirects;
+    int active;        // New: Track if function is executing
+} FunctionEntry;
+
+typedef enum {
     PARSE_COMPLETE,
     PARSE_INCOMPLETE,
     PARSE_ERROR
@@ -129,13 +143,31 @@ typedef struct {
     int brace_depth;
     int paren_depth;
     int expecting;
+    int in_function;   // New: Track if in function context
+    int in_dot_script; // New: Track if in dot script context
 } ParserState;
 
 typedef struct {
-    char **variables;
+    char *name;
+    char *value;
+    int exported; // 1 if exported, 0 otherwise
+} Variable;
+
+typedef struct {
+    Variable *variables;
     int var_count;
     int var_capacity;
+    char *shell_name; // For $0
+    int arg_count;    // For $# (argc - 1)
+    char **args;      // For $1-$9 (argv[1] and up)
 } Environment;
+
+typedef struct Function {
+    char *name;
+    ASTNode *body;
+    Redirect *redirects;
+    bool active;
+} Function;
 
 typedef struct {
     Function *functions;
@@ -143,15 +175,9 @@ typedef struct {
     int func_capacity;
 } FunctionTable;
 
-typedef struct Function {
-    char *name;
-    ASTNode *body;
-    Redirect *redirects;
-} Function;
-
 void init_parser_state(ParserState *state);
 void free_parser_state(ParserState *state);
-void init_environment(Environment *env);
+void init_environment(Environment *env, const char *shell_name, int argc, char *argv[]);
 void free_environment(Environment *env);
 void init_function_table(FunctionTable *ft);
 void free_function_table(FunctionTable *ft);
@@ -162,11 +188,14 @@ ASTNode *get_function_body(FunctionTable *ft, const char *name);
 Redirect *get_function_redirects(FunctionTable *ft, const char *name);
 void tokenize(const char *input, Token *tokens, int *token_count);
 ParseStatus parse_line(const char *line, ParserState *state, ASTNode **ast);
-void execute_ast(ASTNode *ast, Environment *env, FunctionTable *ft, int *last_exit_status);
+ExecStatus execute_ast(ASTNode *node, Environment *env, FunctionTable *ft, int *last_exit_status);
+ExecStatus execute_simple_command(ASTNode *node, Environment *env, FunctionTable *ft, int *last_exit_status);
 void free_ast(ASTNode *node);
 void print_ast(ASTNode *node, int depth);
 char *get_shebang_interpreter(const char *filename);
 char *expand_assignment(const char *assignment, Environment *env, FunctionTable *ft, int *last_exit_status);
+void export_variable(Environment *env, const char *name);
+void unset_variable(Environment *env, const char *name);
 
 #define EXPECTING_RBRACE  (1 << 0)
 #define EXPECTING_RPAREN  (1 << 1)

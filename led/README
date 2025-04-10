@@ -1,0 +1,8 @@
+LINE EDITOR
+
+This is a line editor in the spirit of `ed` called `led`.
+
+It can be used to enter text files.
+
+I didn't actually use this editor, but I *could have*, so
+philosophically am including it as part of my Valid C bootstrap.

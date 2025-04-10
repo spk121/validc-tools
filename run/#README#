@@ -1,0 +1,10 @@
+RUN
+
+`run` is a simplistic script host that only uses C23.
+
+The format is this
+
+Comments: a semicolon in the first location of a line introduces
+a comment.  The rest of the line is ignored.
+
+Variables:  A variable definition begins with the string "set " which must be in the first column. There may be only one space after "set ". After the space, everything that follows that isn't an equal sign is a variable name. The equals sign 
