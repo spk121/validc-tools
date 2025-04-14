@@ -14,7 +14,7 @@ typedef enum {
     AND_IF, OR_IF, DSEMI, DLESS, DGREAT, LESSAND, GREATAND, LESSGREAT, DLESSDASH, CLOBBER,
     LESS, GREAT, PIPE, SEMI, AMP, LPAREN, RPAREN,
     IF, THEN, ELSE, ELIF, FI, DO, DONE, CASE, ESAC, WHILE, UNTIL, FOR,
-    LBRACE, RBRACE, BANG, IN, WORD
+    LBRACE, RBRACE, BANG, IN, WORD, TILDE // Added TILDE
 } TokenType;
 
 typedef struct {
@@ -25,7 +25,8 @@ typedef struct {
 typedef enum {
     AST_SIMPLE_COMMAND, AST_PIPELINE, AST_AND_OR, AST_LIST, AST_COMPLETE_COMMAND, AST_PROGRAM,
     AST_IF_CLAUSE, AST_FOR_CLAUSE, AST_CASE_CLAUSE, AST_WHILE_CLAUSE, AST_UNTIL_CLAUSE,
-    AST_BRACE_GROUP, AST_SUBSHELL, AST_FUNCTION_DEFINITION, AST_IO_REDIRECT
+    AST_BRACE_GROUP, AST_SUBSHELL, AST_FUNCTION_DEFINITION, AST_IO_REDIRECT,
+    AST_EXPANSION // Added
 } ASTNodeType;
 
 typedef struct CaseItem {
@@ -38,14 +39,59 @@ typedef struct CaseItem {
 
 typedef struct Redirect {
     TokenType operator;
-    char *filename;          // For <file, >file, etc.
-    char *io_number;        // e.g., "2" in 2>
-    char *delimiter;        // Heredoc delimiter (e.g., "EOF")
-    char *heredoc_content;  // Heredoc content (multi-line string)
-    int is_quoted;          // 1 if delimiter was quoted (disables expansion)
-    int is_dash;            // 1 for <<- (tab stripping)
+    char *filename;
+    char *io_number;
+    char *delimiter;
+    char *heredoc_content;
+    int is_quoted;
+    int is_dash;
     struct Redirect *next;
 } Redirect;
+
+typedef enum {
+    EXPANSION_PARAMETER, EXPANSION_SPECIAL, EXPANSION_DEFAULT, EXPANSION_ASSIGN,
+    EXPANSION_SUBSTRING, EXPANSION_LENGTH, EXPANSION_PREFIX_SHORT, EXPANSION_PREFIX_LONG,
+    EXPANSION_SUFFIX_SHORT, EXPANSION_SUFFIX_LONG, EXPANSION_COMMAND,
+    EXPANSION_ARITHMETIC, EXPANSION_TILDE
+} ExpansionType;
+
+typedef struct {
+    ExpansionType type;
+    union {
+        struct { // EXPANSION_PARAMETER
+            char *name;
+        } parameter;
+        struct { // EXPANSION_SPECIAL
+            char *name; // *, @, #, ?, etc.
+        } special;
+        struct { // EXPANSION_DEFAULT, EXPANSION_ASSIGN
+            char *var;
+            char *default_value;
+            int is_colon; // :- or :=
+        } default_exp;
+        struct { // EXPANSION_SUBSTRING
+            char *var;
+            char *offset;
+            char *length;
+        } substring;
+        struct { // EXPANSION_LENGTH
+            char *var;
+        } length;
+        struct { // EXPANSION_PREFIX_SHORT, EXPANSION_PREFIX_LONG, EXPANSION_SUFFIX_SHORT, EXPANSION_SUFFIX_LONG
+            char *var;
+            char *pattern;
+        } pattern;
+        struct { // EXPANSION_COMMAND
+            struct ASTNode *command;
+        } command;
+        struct { // EXPANSION_ARITHMETIC
+            char *expression;
+        } arithmetic;
+        struct { // EXPANSION_TILDE
+            char *user; // NULL for ~, username for ~user
+        } tilde;
+    } data;
+} Expansion;
 
 typedef struct ASTNode {
     ASTNodeType type;
@@ -56,6 +102,8 @@ typedef struct ASTNode {
             char *command;
             char **suffix;
             int suffix_count;
+            Expansion **expansions; // Added
+            int expansion_count;    // Added
             Redirect *redirects;
         } simple_command;
         struct { // AST_PIPELINE
@@ -118,7 +166,12 @@ typedef struct ASTNode {
             TokenType operator;
             char *filename;
             char *io_number;
+            char *delimiter;
+            char *heredoc_content;
+            int is_quoted;
+            int is_dash;
         } io_redirect;
+        Expansion expansion; // Added
     } data;
 } ASTNode;
 

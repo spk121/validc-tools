@@ -8,78 +8,14 @@
 ParserState *current_parser_state = NULL;
 
 static const char *operators[] = {
-    "&&", "||", ";;", "<<", ">>", "<&", ">&", "<>", "<<-", ">|", "<", ">", "|", ";", "&", "(", ")", NULL
+    "&&", "||", ";;", "<<", ">>", "<&", ">&", "<>", "<<-", ">|",
+    "<", ">", "|", ";", "&", "(", ")", NULL
 };
 
 static const char *reserved_words[] = {
-    "if", "then", "else", "elif", "fi", "do", "done",
-    "case", "esac", "while", "until", "for",
-    "{", "}", "!", "in", NULL
+    "if", "then", "else", "elif", "fi", "do", "done", "case", "esac",
+    "while", "until", "for", "{", "}", "!", "in", NULL
 };
-
-static int is_operator_start(char c) {
-    return (c == '&' || c == '|' || c == ';' || c == '(' || c == ')' || c == '<' || c == '>');
-}
-
-static TokenType get_operator_type(const char *str) {
-    if (strcmp(str, "&&") == 0) return AND_IF;
-    if (strcmp(str, "||") == 0) return OR_IF;
-    if (strcmp(str, ";;") == 0) return DSEMI;
-    if (strcmp(str, "<<") == 0) return DLESS;
-    if (strcmp(str, ">>") == 0) return DGREAT;
-    if (strcmp(str, "<&") == 0) return LESSAND;
-    if (strcmp(str, ">&") == 0) return GREATAND;
-    if (strcmp(str, "<>") == 0) return LESSGREAT;
-    if (strcmp(str, "<<-") == 0) return DLESSDASH;
-    if (strcmp(str, ">|") == 0) return CLOBBER;
-    if (strcmp(str, "<") == 0) return LESS;
-    if (strcmp(str, ">") == 0) return GREAT;
-    if (strcmp(str, "|") == 0) return PIPE;
-    if (strcmp(str, ";") == 0) return SEMI;
-    if (strcmp(str, "&") == 0) return AMP;
-    if (strcmp(str, "(") == 0) return LPAREN;
-    if (strcmp(str, ")") == 0) return RPAREN;
-    return TOKEN;
-}
-
-static int is_operator(const char *str) {
-    return get_operator_type(str) != TOKEN;
-}
-
-static TokenType get_reserved_word_type(const char *str) {
-    if (strcmp(str, "if") == 0) return IF;
-    if (strcmp(str, "then") == 0) return THEN;
-    if (strcmp(str, "else") == 0) return ELSE;
-    if (strcmp(str, "elif") == 0) return ELIF;
-    if (strcmp(str, "fi") == 0) return FI;
-    if (strcmp(str, "do") == 0) return DO;
-    if (strcmp(str, "done") == 0) return DONE;
-    if (strcmp(str, "case") == 0) return CASE;
-    if (strcmp(str, "esac") == 0) return ESAC;
-    if (strcmp(str, "while") == 0) return WHILE;
-    if (strcmp(str, "until") == 0) return UNTIL;
-    if (strcmp(str, "for") == 0) return FOR;
-    if (strcmp(str, "{") == 0) return LBRACE;
-    if (strcmp(str, "}") == 0) return RBRACE;
-    if (strcmp(str, "!") == 0) return BANG;
-    if (strcmp(str, "in") == 0) return IN;
-    return TOKEN;
-}
-
-static int is_all_digits(const char *str) {
-    for (int i = 0; str[i]; i++) {
-        if (!isdigit((unsigned char)str[i])) return 0;
-    }
-    return 1;
-}
-
-static int is_valid_name(const char *str) {
-    if (!str[0] || (!isalpha((unsigned char)str[0]) && str[0] != '_')) return 0;
-    for (int i = 1; str[i]; i++) {
-        if (!isalnum((unsigned char)str[i]) && str[i] != '_') return 0;
-    }
-    return 1;
-}
 
 
 // Helper to append to a dynamic string
@@ -92,56 +28,274 @@ static void append_to_string(char **str, int *capacity, int *len, char c) {
     (*str)[*len] = '\0';
 }
 
-static const char *parse_expansion(const char *input, char *token, int *pos, int max_len, int in_double_quote,
-    int depth,
-    char **active_aliases, int active_alias_count) {
-    const char *p = input;
+static int is_operator_start(char c) {
+    return (c == '&' || c == '|' || c == ';' || c == '<' || c == '>' || c == '(' || c == ')');
+}
+
+static int is_operator(const char *str) {
+    for (int i = 0; operators[i]; i++) {
+        if (strcmp(str, operators[i]) == 0) return 1;
+    }
+    return 0;
+}
+
+static TokenType get_operator_type(const char *op) {
+    if (strcmp(op, "&&") == 0) return AND_IF;
+    if (strcmp(op, "||") == 0) return OR_IF;
+    if (strcmp(op, ";;") == 0) return DSEMI;
+    if (strcmp(op, "<<") == 0) return DLESS;
+    if (strcmp(op, ">>") == 0) return DGREAT;
+    if (strcmp(op, "<&") == 0) return LESSAND;
+    if (strcmp(op, ">&") == 0) return GREATAND;
+    if (strcmp(op, "<>") == 0) return LESSGREAT;
+    if (strcmp(op, "<<-") == 0) return DLESSDASH;
+    if (strcmp(op, ">|") == 0) return CLOBBER;
+    if (strcmp(op, "<") == 0) return LESS;
+    if (strcmp(op, ">") == 0) return GREAT;
+    if (strcmp(op, "|") == 0) return PIPE;
+    if (strcmp(op, ";") == 0) return SEMI;
+    if (strcmp(op, "&") == 0) return AMP;
+    if (strcmp(op, "(") == 0) return LPAREN;
+    if (strcmp(op, ")") == 0) return RPAREN;
+    return TOKEN;
+}
+
+static TokenType get_reserved_word_type(const char *word) {
+    for (int i = 0; reserved_words[i]; i++) {
+        if (strcmp(word, reserved_words[i]) == 0) {
+            switch (i) {
+                case 0: return IF;
+                case 1: return THEN;
+                case 2: return ELSE;
+                case 3: return ELIF;
+                case 4: return FI;
+                case 5: return DO;
+                case 6: return DONE;
+                case 7: return CASE;
+                case 8: return ESAC;
+                case 9: return WHILE;
+                case 10: return UNTIL;
+                case 11: return FOR;
+                case 12: return LBRACE;
+                case 13: return RBRACE;
+                case 14: return BANG;
+                case 15: return IN;
+                default: return TOKEN;
+            }
+        }
+    }
+    return TOKEN;
+}
+
+static int is_valid_name(const char *name) {
+    if (!name || !*name || isdigit(*name)) return 0;
+    for (const char *p = name; *p; p++) {
+        if (!isalnum(*p) && *p != '_') return 0;
+    }
+    return 1;
+}
+
+static int is_all_digits(const char *str) {
+    for (const char *p = str; *p; p++) {
+        if (!isdigit(*p)) return 0;
+    }
+    return *str != '\0';
+}
+
+
+static const char *parse_expansion(const char *p, char *current_token, int *pos,
+                                  int max_len, int in_quotes, int depth,
+                                  char **active_aliases, int active_alias_count) {
     if (*p == '$') {
-        token[(*pos)++] = *p++;
+        p++;
         if (*p == '{') {
-            token[(*pos)++] = *p++;
-            int brace_count = 1;
-            while (*p && brace_count > 0) {
-                if (*p == '{') brace_count++;
-                else if (*p == '}') brace_count--;
-                if (in_double_quote && *p == '\\' && p[1] && strchr("\"'", p[1])) {
-                    token[(*pos)++] = *p++;
-                    token[(*pos)++] = *p++;
-                } else {
-                    token[(*pos)++] = *p++;
+            p++;
+            char var_name[MAX_TOKEN_LEN] = {0};
+            int var_pos = 0;
+            int is_advanced = 0;
+            char op = '\0';
+            char *colon = NULL;
+
+            // Check for # (length or prefix removal)
+            if (*p == '#') {
+                is_advanced = 1;
+                op = '#';
+                p++;
+                if (*p == '#') {
+                    op = 'H'; // ## (longest match)
+                    p++;
                 }
             }
-        } else if (*p == '(') {
-            token[(*pos)++] = *p++;
+
+            // Parse variable name
+            while (*p && *p != '}' && *p != ':' && *p != '#' && *p != '%' && var_pos < MAX_TOKEN_LEN - 1) {
+                var_name[var_pos++] = *p++;
+            }
+            var_name[var_pos] = '\0';
+
+            // Check for advanced expansions
+            if (*p == ':') {
+                colon = (char *)p;
+                p++;
+                if (*p == '-' || *p == '=' || *p == '?' || *p == '+') {
+                    is_advanced = 1;
+                    op = *p;
+                    p++;
+                } else if (isdigit(*p) || *p == '-') {
+                    is_advanced = 1;
+                    op = 'S'; // Substring
+                }
+            } else if (*p == '#' || *p == '%') {
+                is_advanced = 1;
+                op = *p;
+                p++;
+                if (*p == '#' || *p == '%') {
+                    op = (*p == '#') ? 'H' : 'P'; // ## or %%
+                    p++;
+                }
+            }
+
+            // Collect rest until }
+            char rest[MAX_TOKEN_LEN] = {0};
+            int rest_pos = 0;
+            while (*p && *p != '}' && rest_pos < MAX_TOKEN_LEN - 1) {
+                rest[rest_pos++] = *p++;
+            }
+            rest[rest_pos] = '\0';
+
+            if (*p == '}') {
+                p++;
+            } else {
+                fprintf(stderr, "Error: Unmatched '}' in parameter expansion\n");
+                return p;
+            }
+
+            // Store expansion in token
+            if (*pos < max_len - 1) current_token[(*pos)++] = '$';
+            if (*pos < max_len - 1) current_token[(*pos)++] = '{';
+            if (op == '#') {
+                if (*pos < max_len - 1) current_token[(*pos)++] = '#';
+            } else if (op == 'H') {
+                if (*pos < max_len - 1) current_token[(*pos)++] = '#';
+                if (*pos < max_len - 1) current_token[(*pos)++] = '#';
+            }
+            for (int i = 0; var_name[i] && *pos < max_len - 1; i++) {
+                current_token[(*pos)++] = var_name[i];
+            }
+            if (colon) {
+                if (*pos < max_len - 1) current_token[(*pos)++] = ':';
+            }
+            if (op && op != '#' && op != 'H' && op != '%' && op != 'P') {
+                if (*pos < max_len - 1) current_token[(*pos)++] = op;
+            } else if (op == '%') {
+                if (*pos < max_len - 1) current_token[(*pos)++] = '%';
+            } else if (op == 'P') {
+                if (*pos < max_len - 1) current_token[(*pos)++] = '%';
+                if (*pos < max_len - 1) current_token[(*pos)++] = '%';
+            }
+            for (int i = 0; rest[i] && *pos < max_len - 1; i++) {
+                current_token[(*pos)++] = rest[i];
+            }
+            if (*pos < max_len - 1) current_token[(*pos)++] = '}';
+            return p;
+        } else if (*p == '(' && p[1] == '(') {
+            // Arithmetic expansion
+            p += 2;
             int paren_count = 1;
-            while (*p && paren_count > 0) {
+            char expr[MAX_TOKEN_LEN] = {0};
+            int expr_pos = 0;
+            while (*p && paren_count > 0 && expr_pos < MAX_TOKEN_LEN - 1) {
                 if (*p == '(') paren_count++;
                 else if (*p == ')') paren_count--;
-                if (in_double_quote && *p == '\\' && p[1] && strchr("\"'", p[1])) {
-                    token[(*pos)++] = *p++;
-                    token[(*pos)++] = *p++;
-                } else if (*p == '$' || *p == '`') {
-                    p = parse_expansion(p, token, pos, max_len, in_double_quote, depth, active_aliases, active_alias_count);
-                } else {
-                    token[(*pos)++] = *p++;
+                if (paren_count > 0) {
+                    expr[expr_pos++] = *p;
+                }
+                p++;
+            }
+            expr[expr_pos] = '\0';
+            if (paren_count == 0 && *p == ')') {
+                p++; // Consume final )
+                if (*pos < max_len - 1) current_token[(*pos)++] = '$';
+                if (*pos < max_len - 1) current_token[(*pos)++] = '(';
+                if (*pos < max_len - 1) current_token[(*pos)++] = '(';
+                for (int i = 0; expr[i] && *pos < max_len - 1; i++) {
+                    current_token[(*pos)++] = expr[i];
+                }
+                if (*pos < max_len - 1) current_token[(*pos)++] = ')';
+                if (*pos < max_len - 1) current_token[(*pos)++] = ')';
+            } else {
+                fprintf(stderr, "Error: Unmatched '))' in arithmetic expansion\n");
+            }
+            return p;
+        } else if (*p == '(') {
+            // Command substitution
+            p++;
+            int paren_count = 1;
+            char cmd[MAX_TOKEN_LEN] = {0};
+            int cmd_pos = 0;
+            while (*p && paren_count > 0 && cmd_pos < MAX_TOKEN_LEN - 1) {
+                if (*p == '(') paren_count++;
+                else if (*p == ')') paren_count--;
+                if (paren_count > 0) {
+                    cmd[cmd_pos++] = *p;
+                }
+                p++;
+            }
+            cmd[cmd_pos] = '\0';
+            if (paren_count == 0) {
+                if (*pos < max_len - 1) current_token[(*pos)++] = '$';
+                if (*pos < max_len - 1) current_token[(*pos)++] = '(';
+                for (int i = 0; cmd[i] && *pos < max_len - 1; i++) {
+                    current_token[(*pos)++] = cmd[i];
+                }
+                if (*pos < max_len - 1) current_token[(*pos)++] = ')';
+            } else {
+                fprintf(stderr, "Error: Unmatched ')' in command substitution\n");
+            }
+            return p;
+        } else if (isalpha(*p) || *p == '_' || strchr("*@#?$!-0", *p)) {
+            // Parameter or special parameter
+            char var_name[MAX_TOKEN_LEN] = {0};
+            int var_pos = 0;
+            var_name[var_pos++] = *p++;
+            if (var_name[0] == '*' || var_name[0] == '@' || var_name[0] == '#' ||
+                var_name[0] == '?' || var_name[0] == '!' || var_name[0] == '-' ||
+                var_name[0] == '$' || var_name[0] == '0') {
+                // Special parameter
+            } else {
+                while (*p && (isalnum(*p) || *p == '_') && var_pos < MAX_TOKEN_LEN - 1) {
+                    var_name[var_pos++] = *p++;
                 }
             }
+            var_name[var_pos] = '\0';
+            if (*pos < max_len - 1) current_token[(*pos)++] = '$';
+            for (int i = 0; var_name[i] && *pos < max_len - 1; i++) {
+                current_token[(*pos)++] = var_name[i];
+            }
+            return p;
         } else {
-            while (*p && (isalnum(*p) || *p == '_')) token[(*pos)++] = *p++;
+            if (*pos < max_len - 1) current_token[(*pos)++] = '$';
+            return p;
         }
     } else if (*p == '`') {
-        token[(*pos)++] = *p++;
-        while (*p && *p != '`') {
-            if (*p == '\\' && p[1]) {
-                token[(*pos)++] = *p++;
-                token[(*pos)++] = *p++;
-            } else if (*p == '$' || *p == '`') {
-                p = parse_expansion(p, token, pos, max_len, in_double_quote, depth, active_aliases, active_alias_count);
-            } else {
-                token[(*pos)++] = *p++;
-            }
+        p++;
+        char cmd[MAX_TOKEN_LEN] = {0};
+        int cmd_pos = 0;
+        while (*p && *p != '`' && cmd_pos < MAX_TOKEN_LEN - 1) {
+            cmd[cmd_pos++] = *p++;
         }
-        if (*p) token[(*pos)++] = *p++;
+        cmd[cmd_pos] = '\0';
+        if (*p == '`') {
+            p++;
+            if (*pos < max_len - 1) current_token[(*pos)++] = '`';
+            for (int i = 0; cmd[i] && *pos < max_len - 1; i++) {
+                current_token[(*pos)++] = cmd[i];
+            }
+            if (*pos < max_len - 1) current_token[(*pos)++] = '`';
+        } else {
+            fprintf(stderr, "Error: Unmatched '`' in command substitution\n");
+        }
+        return p;
     }
     return p;
 }
@@ -152,8 +306,9 @@ void tokenize(const char *input, Token *tokens, int *token_count, int depth,
     const char *p = input;
     char current_token[MAX_TOKEN_LEN];
     int pos = 0;
-    int in_quoted = 0; // Track if we're in a quoted heredoc delimiter
+    int in_quoted = 0;
     int in_word = 0;
+    int after_equals = 0; // Track for tilde after =
 
     // Helper macro to check MAX_TOKEN_LEN
     #define CHECK_TOKEN_LEN() do { \
@@ -274,41 +429,61 @@ void tokenize(const char *input, Token *tokens, int *token_count, int depth,
             // Store delimiter and content as a single token (for simplicity)
             CHECK_TOKEN_COUNT();
             snprintf(tokens[*token_count].text, MAX_TOKEN_LEN, "%s\n%s", delimiter, content);
-            tokens[*token_count].type = WORD; // Temporary, parser will handle
+            tokens[*token_count].type = WORD;
             (*token_count)++;
             free(content);
             continue;
         }
 
-        // Existing tokenization logic (simplified for brevity)
-        if (*p == '\0') {
-            if (in_word) {
+        // Handle tilde expansion
+        if (*p == '~' && !in_quoted && (!in_word || after_equals)) {
+            if (pos > 0) {
                 current_token[pos] = '\0';
                 CHECK_TOKEN_COUNT();
                 strncpy(tokens[*token_count].text, current_token, MAX_TOKEN_LEN);
+                tokens[*token_count].type = WORD;
                 (*token_count)++;
+                pos = 0;
+                in_word = 0;
             }
-            break;
+            char tilde_text[MAX_TOKEN_LEN] = {0};
+            int tilde_pos = 0;
+            tilde_text[tilde_pos++] = *p++;
+            if (*p && (isalpha(*p) || *p == '_')) {
+                while (*p && (isalnum(*p) || *p == '_') && tilde_pos < MAX_TOKEN_LEN - 1) {
+                    tilde_text[tilde_pos++] = *p++;
+                }
+            }
+            tilde_text[tilde_pos] = '\0';
+            CHECK_TOKEN_COUNT();
+            strncpy(tokens[*token_count].text, tilde_text, MAX_TOKEN_LEN);
+            tokens[*token_count].type = TILDE;
+            (*token_count)++;
+            after_equals = 0;
+            continue;
         }
 
-        if (*p == '#' && !in_word) {
+        if (*p == '#' && !in_word && !in_quoted) {
             while (*p && *p != '\n') p++;
             continue;
         }
 
-        if (*p == '\n' && !in_word) {
-            current_token[pos] = '\0';
-            if (pos > 0) {
+        if (*p == '\n' && !in_quoted) {
+            if (in_word) {
+                current_token[pos] = '\0';
                 CHECK_TOKEN_COUNT();
                 strncpy(tokens[*token_count].text, current_token, MAX_TOKEN_LEN);
+                tokens[*token_count].type = WORD;
                 (*token_count)++;
+                pos = 0;
+                in_word = 0;
             }
             CHECK_TOKEN_COUNT();
             strncpy(tokens[*token_count].text, "\n", MAX_TOKEN_LEN);
             tokens[*token_count].type = NEWLINE;
             (*token_count)++;
-            pos = 0;
             p++;
+            after_equals = 0;
             continue;
         }
 
@@ -326,6 +501,7 @@ void tokenize(const char *input, Token *tokens, int *token_count, int depth,
                 continue;
             }
             if (*p == '\'') {
+                in_quoted = 1;
                 CHECK_TOKEN_LEN();
                 current_token[pos++] = *p++;
                 while (*p && *p != '\'') {
@@ -335,6 +511,7 @@ void tokenize(const char *input, Token *tokens, int *token_count, int depth,
                 if (*p == '\'') {
                     CHECK_TOKEN_LEN();
                     current_token[pos++] = *p++;
+                    in_quoted = 0;
                 } else {
                     fprintf(stderr, "Error: Unmatched single quote\n");
                     return;
@@ -342,55 +519,32 @@ void tokenize(const char *input, Token *tokens, int *token_count, int depth,
                 continue;
             }
             if (*p == '"') {
+                in_quoted = !in_quoted;
                 CHECK_TOKEN_LEN();
                 current_token[pos++] = *p++;
-                while (*p && *p != '"') {
-                    if (*p == '\\') {
-                        CHECK_TOKEN_LEN();
-                        current_token[pos++] = *p++;
-                        if (*p && strchr("$`\"\\", *p)) {
-                            CHECK_TOKEN_LEN();
-                            current_token[pos++] = *p++;
-                        } else if (*p == '\n') {
-                            p++;
-                        } else if (*p) {
-                            CHECK_TOKEN_LEN();
-                            current_token[pos++] = *p++;
-                        }
-                    } else if (*p == '$' || *p == '`') {
-                        p = parse_expansion(p, current_token, &pos, MAX_TOKEN_LEN, 1, depth, active_aliases, active_alias_count);
-                    } else {
-                        CHECK_TOKEN_LEN();
-                        current_token[pos++] = *p++;
-                    }
-                }
-                if (*p == '"') {
-                    CHECK_TOKEN_LEN();
-                    current_token[pos++] = *p++;
-                } else {
-                    fprintf(stderr, "Error: Unmatched double quote\n");
-                    return;
-                }
                 continue;
             }
         }
 
-        if ((*p == '$' || *p == '`') && !in_word) {
-            if (!in_word) in_word = 1;
-            p = parse_expansion(p, current_token, &pos, MAX_TOKEN_LEN, 0, depth, active_aliases, active_alias_count);
+        if (*p == '$' || *p == '`') {
+            if (!in_word && !in_quoted) in_word = 1;
+            p = parse_expansion(p, current_token, &pos, MAX_TOKEN_LEN, in_quoted, depth,
+                               active_aliases, active_alias_count);
             continue;
         }
 
-        if (isspace(*p) && *p != '\n') {
+        if (isspace(*p) && *p != '\n' && !in_quoted) {
             if (in_word) {
                 current_token[pos] = '\0';
                 CHECK_TOKEN_COUNT();
                 strncpy(tokens[*token_count].text, current_token, MAX_TOKEN_LEN);
+                tokens[*token_count].type = WORD;
                 (*token_count)++;
                 pos = 0;
                 in_word = 0;
             }
             p++;
+            after_equals = 0;
             continue;
         }
 
@@ -399,6 +553,7 @@ void tokenize(const char *input, Token *tokens, int *token_count, int depth,
                 current_token[pos] = '\0';
                 CHECK_TOKEN_COUNT();
                 strncpy(tokens[*token_count].text, current_token, MAX_TOKEN_LEN);
+                tokens[*token_count].type = WORD;
                 (*token_count)++;
                 pos = 0;
                 in_word = 0;
@@ -413,12 +568,20 @@ void tokenize(const char *input, Token *tokens, int *token_count, int depth,
             if (is_operator(current_token)) {
                 CHECK_TOKEN_COUNT();
                 strncpy(tokens[*token_count].text, current_token, MAX_TOKEN_LEN);
+                tokens[*token_count].type = get_operator_type(current_token);
                 (*token_count)++;
                 pos = 0;
             } else {
                 pos = 0;
             }
+            after_equals = 0;
             continue;
+        }
+
+        if (*p == '=') {
+            after_equals = 1;
+        } else if (!isspace(*p)) {
+            after_equals = 0;
         }
 
         if (!in_word) in_word = 1;
@@ -430,33 +593,42 @@ void tokenize(const char *input, Token *tokens, int *token_count, int depth,
         current_token[pos] = '\0';
         CHECK_TOKEN_COUNT();
         strncpy(tokens[*token_count].text, current_token, MAX_TOKEN_LEN);
+        tokens[*token_count].type = WORD;
         (*token_count)++;
     }
 
-    // Existing post-processing (operators, IO_NUMBER, reserved words, aliases)
+    // Post-processing
     for (int i = 0; i < *token_count; i++) {
         if (is_operator(tokens[i].text)) {
             tokens[i].type = get_operator_type(tokens[i].text);
         } else if (i + 1 < *token_count && is_all_digits(tokens[i].text) &&
-                   (strcmp(tokens[i + 1].text, "<") == 0 || strcmp(tokens[i + 1].text, ">") == 0)) {
+                   (tokens[i + 1].type == LESS || tokens[i + 1].type == GREAT ||
+                    tokens[i + 1].type == DGREAT || tokens[i + 1].type == DLESS ||
+                    tokens[i + 1].type == DLESSDASH || tokens[i + 1].type == LESSAND ||
+                    tokens[i + 1].type == GREATAND || tokens[i + 1].type == LESSGREAT ||
+                    tokens[i + 1].type == CLOBBER)) {
             tokens[i].type = IO_NUMBER;
         } else {
-            tokens[i].type = TOKEN;
+            tokens[i].type = tokens[i].type == TILDE ? TILDE : TOKEN;
         }
     }
 
     for (int i = 0; i < *token_count; i++) {
         if (tokens[i].type == TOKEN) {
-            if (i == 0 || (i > 0 && is_operator(tokens[i - 1].text))) {
+            if (i == 0 || (i > 0 && (is_operator(tokens[i - 1].text) ||
+                                     tokens[i - 1].type == NEWLINE))) {
                 TokenType reserved = get_reserved_word_type(tokens[i].text);
                 if (reserved != TOKEN) {
                     tokens[i].type = reserved;
-                } else if (i + 1 < *token_count && (tokens[i + 1].type == DO || tokens[i + 1].type == LPAREN) && is_valid_name(tokens[i].text)) {
+                } else if (i + 1 < *token_count && (tokens[i + 1].type == DO ||
+                                                  tokens[i + 1].type == LPAREN) &&
+                           is_valid_name(tokens[i].text)) {
                     tokens[i].type = NAME;
                 } else {
                     tokens[i].type = WORD;
                 }
-            } else if (i > 0 && tokens[i - 1].type != ASSIGNMENT_WORD && strchr(tokens[i].text, '=')) {
+            } else if (i > 0 && tokens[i - 1].type != ASSIGNMENT_WORD &&
+                       strchr(tokens[i].text, '=')) {
                 char *eq = strchr(tokens[i].text, '=');
                 if (eq != tokens[i].text) {
                     *eq = '\0';
@@ -674,69 +846,153 @@ static ASTNode *parse_simple_command(ParserState *state) {
     node->data.simple_command.command = NULL;
     node->data.simple_command.suffix = NULL;
     node->data.simple_command.suffix_count = 0;
+    node->data.simple_command.expansions = NULL;
+    node->data.simple_command.expansion_count = 0;
     node->data.simple_command.redirects = NULL;
 
-    while (state->pos < state->token_count && (state->tokens[state->pos].type == ASSIGNMENT_WORD || state->tokens[state->pos].type == IO_NUMBER ||
-           state->tokens[state->pos].type == LESS || state->tokens[state->pos].type == GREAT || state->tokens[state->pos].type == DLESS ||
-           state->tokens[state->pos].type == DGREAT || state->tokens[state->pos].type == LESSAND || state->tokens[state->pos].type == GREATAND ||
-           state->tokens[state->pos].type == LESSGREAT || state->tokens[state->pos].type == CLOBBER)) {
-        if (state->tokens[state->pos].type == ASSIGNMENT_WORD) {
-            node->data.simple_command.prefix = realloc(node->data.simple_command.prefix,
-                (node->data.simple_command.prefix_count + 1) * sizeof(char *));
-            node->data.simple_command.prefix[node->data.simple_command.prefix_count] = strdup(state->tokens[state->pos].text);
-            node->data.simple_command.prefix_count++;
-            (state->pos)++;
-        } else {
-            int prev_pos = state->pos;
-            Redirect *redir = parse_redirect_list(state);
-            if (redir) {
-                if (!node->data.simple_command.redirects) {
-                    node->data.simple_command.redirects = redir;
-                } else {
-                    Redirect *last = node->data.simple_command.redirects;
-                    while (last->next) last = last->next;
-                    last->next = redir;
+    // Parse prefix (assignments)
+    while (state->pos < state->token_count && state->tokens[state->pos].type == ASSIGNMENT_WORD) {
+        node->data.simple_command.prefix = realloc(node->data.simple_command.prefix,
+                                                  (node->data.simple_command.prefix_count + 1) * sizeof(char *));
+        node->data.simple_command.prefix[node->data.simple_command.prefix_count++] =
+            strdup(state->tokens[state->pos].text);
+        state->pos++;
+    }
+
+    // Parse expansions and words
+    while (state->pos < state->token_count &&
+           (state->tokens[state->pos].type == WORD || state->tokens[state->pos].type == TILDE)) {
+        if (state->tokens[state->pos].type == TILDE) {
+            // Handle tilde expansion
+            node->data.simple_command.expansions = realloc(node->data.simple_command.expansions,
+                                                         (node->data.simple_command.expansion_count + 1) * sizeof(Expansion *));
+            Expansion *exp = malloc(sizeof(Expansion));
+            exp->type = EXPANSION_TILDE;
+            exp->data.tilde.user = (state->tokens[state->pos].text[1] != '\0') ?
+                                   strdup(state->tokens[state->pos].text + 1) : NULL;
+            node->data.simple_command.expansions[node->data.simple_command.expansion_count++] = exp;
+            state->pos++;
+            continue;
+        }
+
+        char *text = state->tokens[state->pos].text;
+        if (text[0] == '$' || text[0] == '`') {
+            // Parse parameter, command, or arithmetic expansion
+            node->data.simple_command.expansions = realloc(node->data.simple_command.expansions,
+                                                         (node->data.simple_command.expansion_count + 1) * sizeof(Expansion *));
+            Expansion *exp = malloc(sizeof(Expansion));
+            if (text[0] == '`') {
+                exp->type = EXPANSION_COMMAND;
+                char *cmd = strdup(text + 1);
+                cmd[strlen(cmd) - 1] = '\0'; // Remove trailing `
+                ParserState sub_state;
+                init_parser_state(&sub_state);
+                ASTNode *sub_ast = NULL;
+                ParseStatus status = parse_line(cmd, &sub_state, &sub_ast);
+                exp->data.command.command = (status == PARSE_COMPLETE) ? sub_ast : NULL;
+                free(cmd);
+                free_parser_state(&sub_state);
+            } else if (strncmp(text, "$((", 3) == 0) {
+                exp->type = EXPANSION_ARITHMETIC;
+                char *expr = strdup(text + 3);
+                expr[strlen(expr) - 2] = '\0'; // Remove ))
+                exp->data.arithmetic.expression = expr;
+            } else if (strncmp(text, "${", 2) == 0) {
+                char *inner = text + 2;
+                char *end = strchr(inner, '}');
+                if (!end) {
+                    fprintf(stderr, "Error: Invalid parameter expansion %s\n", text);
+                    free(exp);
+                    state->pos++;
+                    continue;
                 }
+                *end = '\0';
+                if (inner[0] == '#') {
+                    if (inner[1] == '#') {
+                        exp->type = EXPANSION_PREFIX_LONG;
+                        exp->data.pattern.var = strdup(inner + 2);
+                        exp->data.pattern.pattern = strdup(end + 1);
+                    } else {
+                        exp->type = EXPANSION_LENGTH;
+                        exp->data.length.var = strdup(inner + 1);
+                    }
+                } else if (strchr(inner, ':')) {
+                    char *colon = strchr(inner, ':');
+                    *colon = '\0';
+                    char op = colon[1];
+                    char *rest = colon + 2;
+                    if (op == '-' || op == '=') {
+                        exp->type = (op == '-') ? EXPANSION_DEFAULT : EXPANSION_ASSIGN;
+                        exp->data.default_exp.var = strdup(inner);
+                        exp->data.default_exp.default_value = strdup(rest);
+                        exp->data.default_exp.is_colon = 1;
+                    } else if (isdigit(op) || op == '-') {
+                        exp->type = EXPANSION_SUBSTRING;
+                        exp->data.substring.var = strdup(inner);
+                        char *len_sep = strchr(rest, ':');
+                        if (len_sep) {
+                            *len_sep = '\0';
+                            exp->data.substring.offset = strdup(rest);
+                            exp->data.substring.length = strdup(len_sep + 1);
+                        } else {
+                            exp->data.substring.offset = strdup(rest);
+                            exp->data.substring.length = NULL;
+                        }
+                    }
+                    *colon = ':';
+                } else if (strchr(inner, '#') || strchr(inner, '%')) {
+                    char *op = strchr(inner, '#') ? strchr(inner, '#') : strchr(inner, '%');
+                    char op_char = *op;
+                    *op = '\0';
+                    if (op[1] == op_char) {
+                        exp->type = (op_char == '#') ? EXPANSION_PREFIX_LONG : EXPANSION_SUFFIX_LONG;
+                        op++;
+                    } else {
+                        exp->type = (op_char == '#') ? EXPANSION_PREFIX_SHORT : EXPANSION_SUFFIX_SHORT;
+                    }
+                    exp->data.pattern.var = strdup(inner);
+                    exp->data.pattern.pattern = strdup(op + 1);
+                    *op = op_char;
+                } else {
+                    exp->type = EXPANSION_PARAMETER;
+                    exp->data.parameter.name = strdup(inner);
+                }
+                *end = '}';
+            } else if (text[1] == '*' || text[1] == '@' || text[1] == '#' ||
+                       text[1] == '?' || text[1] == '!' || text[1] == '-' ||
+                       text[1] == '$' || text[1] == '0') {
+                exp->type = EXPANSION_SPECIAL;
+                exp->data.special.name = strdup(text + 1);
             } else {
-                state->pos = prev_pos;
-                break;
+                exp->type = EXPANSION_PARAMETER;
+                exp->data.parameter.name = strdup(text + 1);
+            }
+            node->data.simple_command.expansions[node->data.simple_command.expansion_count++] = exp;
+        } else {
+            // Regular word
+            if (!node->data.simple_command.command) {
+                node->data.simple_command.command = strdup(text);
+            } else {
+                node->data.simple_command.suffix = realloc(node->data.simple_command.suffix,
+                                                         (node->data.simple_command.suffix_count + 1) * sizeof(char *));
+                node->data.simple_command.suffix[node->data.simple_command.suffix_count++] =
+                    strdup(text);
             }
         }
+        state->pos++;
     }
 
-    if (state->pos < state->token_count && state->tokens[state->pos].type == WORD) {
-        node->data.simple_command.command = strdup(state->tokens[state->pos].text);
-        (state->pos)++;
-    }
+    // Parse redirects
+    node->data.simple_command.redirects = parse_redirect_list(state);
 
-    while (state->pos < state->token_count && (state->tokens[state->pos].type == WORD || state->tokens[state->pos].type == IO_NUMBER ||
-           state->tokens[state->pos].type == LESS || state->tokens[state->pos].type == GREAT || state->tokens[state->pos].type == DLESS ||
-           state->tokens[state->pos].type == DGREAT || state->tokens[state->pos].type == LESSAND || state->tokens[state->pos].type == GREATAND ||
-           state->tokens[state->pos].type == LESSGREAT || state->tokens[state->pos].type == CLOBBER)) {
-        if (state->tokens[state->pos].type == WORD) {
-            node->data.simple_command.suffix = realloc(node->data.simple_command.suffix,
-                (node->data.simple_command.suffix_count + 1) * sizeof(char *));
-            node->data.simple_command.suffix[node->data.simple_command.suffix_count] = strdup(state->tokens[state->pos].text);
-            node->data.simple_command.suffix_count++;
-            (state->pos)++;
-        } else {
-            int prev_pos = state->pos;
-            Redirect *redir = parse_redirect_list(state);
-            if (redir) {
-                if (!node->data.simple_command.redirects) {
-                    node->data.simple_command.redirects = redir;
-                } else {
-                    Redirect *last = node->data.simple_command.redirects;
-                    while (last->next) last = last->next;
-                    last->next = redir;
-                }
-            } else {
-                state->pos = prev_pos;
-                break;
-            }
-        }
+    if (!node->data.simple_command.command &&
+        node->data.simple_command.prefix_count == 0 &&
+        node->data.simple_command.suffix_count == 0 &&
+        node->data.simple_command.expansion_count == 0 &&
+        !node->data.simple_command.redirects) {
+        free_ast(node);
+        return NULL;
     }
-
     return node;
 }
 
@@ -1500,168 +1756,62 @@ char *expand_tilde(const char *value) {
     return strdup(value ? value : "");
 }
 
-static char *expand_parameter(const char *value, Environment *env, int *last_exit_status) {
-    if (!value || value[0] != '$') return strdup(value ? value : "");
-    const char *var_name = value + 1;
-    if (strcmp(var_name, "?") == 0) {
-        char status_str[16];
-        snprintf(status_str, sizeof(status_str), "%d", *last_exit_status);
-        return strdup(status_str);
-    }
-    if (strcmp(var_name, "0") == 0) {
-        return strdup(env->shell_name);
-    }
-    if (strcmp(var_name, "#") == 0) {
-        char count_str[16];
-        snprintf(count_str, sizeof(count_str), "%d", env->arg_count);
-        return strdup(count_str);
-    }
-    if (strlen(var_name) == 1 && var_name[0] >= '1' && var_name[0] <= '9') {
-        int index = var_name[0] - '1'; // Convert '1' to 0, '2' to 1, etc.
-        if (index < env->arg_count) {
-            return strdup(env->args[index]);
+static char *expand_parameter(Expansion *exp, Environment *env, FunctionTable *ft, int *last_exit_status) {
+    switch (exp->type) {
+        case EXPANSION_PARAMETER: {
+            const char *value = get_variable(env, exp->data.parameter.name);
+            return value ? strdup(value) : strdup("");
         }
-        return strdup(""); // Empty string if beyond arg_count
-    }
-    if (var_name[0] == '{') {
-        var_name++;
-        const char *end = strchr(var_name, '}');
-        if (!end) return strdup("");
-        size_t len = end - var_name;
-        char name[len + 1];
-        strncpy(name, var_name, len);
-        name[len] = '\0';
-        const char *val = get_variable(env, name);
-        return strdup(val ? val : "");
-    }
-    const char *val = get_variable(env, var_name);
-    return strdup(val ? val : "");
-}
-
-
-char *expand_command_substitution(const char *value, Environment *env, FunctionTable *ft, int *last_exit_status) {
-    if (!value || (strncmp(value, "$(", 2) != 0 && value[0] != '`')) return strdup(value ? value : "");
-
-#if 0
-    char command[MAX_COMMAND_LEN];
-    const char *start = value;
-    const char *end;
-    if (value[0] == '$') {
-        start += 2;
-        end = strchr(start, ')');
-    } else {
-        start++;
-        end = strchr(start, '`');
-    }
-    if (!end) return strdup("");
-
-    size_t len = end - start;
-    if (len >= MAX_COMMAND_LEN) len = MAX_COMMAND_LEN - 1;
-    strncpy(command, start, len);
-    command[len] = '\0';
-
-    char temp_file[] = "sh23_temp_XXXXXX";
-    int fd = mkstemp(temp_file);
-    if (fd == -1) {
-        fprintf(stderr, "Error: Could not create temp file for command substitution\n");
-        return strdup("");
-    }
-    close(fd);
-
-    char redirected_command[MAX_COMMAND_LEN];
-    snprintf(redirected_command, MAX_COMMAND_LEN, "%s > %s", command, temp_file);
-    int status = system(redirected_command);
-    if (status != 0) {
-        remove(temp_file);
-        return strdup("");
-    }
-
-    FILE *file = fopen(temp_file, "r");
-    if (!file) {
-        remove(temp_file);
-        return strdup("");
-    }
-
-    char result[MAX_COMMAND_LEN];
-    size_t bytes_read = fread(result, 1, MAX_COMMAND_LEN - 1, file);
-    result[bytes_read] = '\0';
-    fclose(file);
-    remove(temp_file);
-
-    char *nl = strchr(result, '\n');
-    if (nl) *nl = '\0';
-
-    return strdup(result);
-#else
-    abort();
-#endif
-}
-
-char *expand_arithmetic(const char *value, Environment *env) {
-    if (!value || strncmp(value, "$((", 3) != 0) return strdup(value ? value : "");
-
-    const char *start = value + 3;
-    const char *end = strstr(start, "))");
-    if (!end) return strdup("");
-
-    size_t len = end - start;
-    char expr[len + 1];
-    strncpy(expr, start, len);
-    expr[len] = '\0';
-
-    int result = 0;
-    char op = '+';
-    char *p = expr;
-    while (*p) {
-        while (isspace((unsigned char)*p)) p++;
-        if (!isdigit((unsigned char)*p)) {
-            if (*p == '+' || *p == '-' || *p == '*' || *p == '/') {
-                op = *p++;
-                continue;
+        case EXPANSION_SPECIAL: {
+            if (strcmp(exp->data.special.name, "?") == 0) {
+                char status_str[16];
+                snprintf(status_str, sizeof(status_str), "%d", *last_exit_status);
+                return strdup(status_str);
+            } else if (strcmp(exp->data.special.name, "0") == 0) {
+                return strdup(env->shell_name);
+            } else if (strcmp(exp->data.special.name, "#") == 0) {
+                char count_str[16];
+                snprintf(count_str, sizeof(count_str), "%d", env->arg_count);
+                return strdup(count_str);
+            } else if (isdigit(exp->data.special.name[0])) {
+                int idx = atoi(exp->data.special.name);
+                if (idx > 0 && idx <= env->arg_count) {
+                    return strdup(env->args[idx]);
+                }
+                return strdup("");
             }
-            break;
+            fprintf(stderr, "Error: Special parameter $%s not supported by sh23\n", exp->data.special.name);
+            *last_exit_status = 1;
+            return strdup("");
         }
-        int num = 0;
-        while (isdigit((unsigned char)*p)) {
-            num = num * 10 + (*p - '0');
-            p++;
-        }
-        switch (op) {
-            case '+': result += num; break;
-            case '-': result -= num; break;
-            case '*': result *= num; break;
-            case '/': result = num ? result / num : 0; break;
-        }
+        case EXPANSION_DEFAULT:
+        case EXPANSION_ASSIGN:
+        case EXPANSION_SUBSTRING:
+        case EXPANSION_LENGTH:
+        case EXPANSION_PREFIX_SHORT:
+        case EXPANSION_PREFIX_LONG:
+        case EXPANSION_SUFFIX_SHORT:
+        case EXPANSION_SUFFIX_LONG:
+            fprintf(stderr, "Error: Advanced parameter expansion not supported by sh23\n");
+            *last_exit_status = 1;
+            return strdup("");
+        case EXPANSION_COMMAND:
+            fprintf(stderr, "Error: Command substitution not supported by sh23\n");
+            *last_exit_status = 1;
+            return strdup("");
+        case EXPANSION_ARITHMETIC:
+            fprintf(stderr, "Error: Arithmetic expansion not supported by sh23\n");
+            *last_exit_status = 1;
+            return strdup("");
+        case EXPANSION_TILDE:
+            fprintf(stderr, "Error: Tilde expansion not supported by sh23\n");
+            *last_exit_status = 1;
+            return strdup("");
+        default:
+            fprintf(stderr, "Error: Unknown expansion type\n");
+            *last_exit_status = 1;
+            return strdup("");
     }
-
-    char result_str[32];
-    snprintf(result_str, sizeof(result_str), "%d", result);
-    return strdup(result_str);
-}
-
-char *remove_quotes(const char *value) {
-    if (!value) return strdup("");
-    size_t len = strlen(value);
-    char *result = malloc(len + 1);
-    size_t j = 0;
-    int in_single = 0, in_double = 0;
-    for (size_t i = 0; i < len; i++) {
-        if (value[i] == '\\' && i + 1 < len) {
-            result[j++] = value[++i];
-            continue;
-        }
-        if (value[i] == '\'' && !in_double) {
-            in_single = !in_single;
-            continue;
-        }
-        if (value[i] == '"' && !in_single) {
-            in_double = !in_double;
-            continue;
-        }
-        result[j++] = value[i];
-    }
-    result[j] = '\0';
-    return result;
 }
 
 char *expand_assignment(const char *assignment, Environment *env, FunctionTable *ft, int *last_exit_status) {
@@ -1830,10 +1980,15 @@ ExecStatus execute_ast(ASTNode *node, Environment *env, FunctionTable *ft, int *
                 }
                 redir = redir->next;
             }
+            // Handle expansions in execution (simplified)            
+			for (int i = 0; i < node->data.simple_command.expansion_count; i++) {
+                char *value = expand_parameter(node->data.simple_command.expansions[i], env, ft, last_exit_status);
+                free(value); // For now, just parse, execution will error
+            }
             return execute_simple_command(node, env, ft, last_exit_status);
-        }
-
-        case AST_PIPELINE: {
+        }        
+		
+		case AST_PIPELINE: {
             // Reject pipelines with multiple commands
             if (node->data.pipeline.command_count > 1) {
                 fprintf(stderr, "Error: Pipelines (|) not supported by sh23\n");
@@ -2200,7 +2355,50 @@ void free_ast(ASTNode *node) {
             for (int i = 0; i < node->data.simple_command.suffix_count; i++) {
                 free(node->data.simple_command.suffix[i]);
             }
-            free(node->data.simple_command.suffix);
+            for (int i = 0; i < node->data.simple_command.expansion_count; i++) {
+                Expansion *exp = node->data.simple_command.expansions[i];
+                switch (exp->type) {
+                    case EXPANSION_PARAMETER:
+                        free(exp->data.parameter.name);
+                        break;
+                    case EXPANSION_SPECIAL:
+                        free(exp->data.special.name);
+                        break;
+                    case EXPANSION_DEFAULT:
+                    case EXPANSION_ASSIGN:
+                        free(exp->data.default_exp.var);
+                        free(exp->data.default_exp.default_value);
+                        break;
+                    case EXPANSION_SUBSTRING:
+                        free(exp->data.substring.var);
+                        free(exp->data.substring.offset);
+                        if (exp->data.substring.length) free(exp->data.substring.length);
+                        break;
+                    case EXPANSION_LENGTH:
+                        free(exp->data.length.var);
+                        break;
+                    case EXPANSION_PREFIX_SHORT:
+                    case EXPANSION_PREFIX_LONG:
+                    case EXPANSION_SUFFIX_SHORT:
+                    case EXPANSION_SUFFIX_LONG:
+                        free(exp->data.pattern.var);
+                        free(exp->data.pattern.pattern);
+                        break;
+                    case EXPANSION_COMMAND:
+                        free_ast(exp->data.command.command);
+                        break;
+                    case EXPANSION_ARITHMETIC:
+                        free(exp->data.arithmetic.expression);
+                        break;
+                    case EXPANSION_TILDE:
+                        if (exp->data.tilde.user) free(exp->data.tilde.user);
+                        break;
+                    default:
+                        break;
+                }
+                free(exp);
+            }
+            free(node->data.simple_command.expansions);
             {
                 Redirect *redir = node->data.simple_command.redirects;
                 while (redir) {
@@ -2215,6 +2413,49 @@ void free_ast(ASTNode *node) {
             }
             break;
 
+        case AST_EXPANSION: {
+            Expansion *exp = &node->data.expansion;
+            switch (exp->type) {
+                case EXPANSION_PARAMETER:
+                    free(exp->data.parameter.name);
+                    break;
+                case EXPANSION_SPECIAL:
+                    free(exp->data.special.name);
+                    break;
+                case EXPANSION_DEFAULT:
+                case EXPANSION_ASSIGN:
+                    free(exp->data.default_exp.var);
+                    free(exp->data.default_exp.default_value);
+                    break;
+                case EXPANSION_SUBSTRING:
+                    free(exp->data.substring.var);
+                    free(exp->data.substring.offset);
+                    if (exp->data.substring.length) free(exp->data.substring.length);
+                    break;
+                case EXPANSION_LENGTH:
+                    free(exp->data.length.var);
+                    break;
+                case EXPANSION_PREFIX_SHORT:
+                case EXPANSION_PREFIX_LONG:
+                case EXPANSION_SUFFIX_SHORT:
+                case EXPANSION_SUFFIX_LONG:
+                    free(exp->data.pattern.var);
+                    free(exp->data.pattern.pattern);
+                    break;
+                case EXPANSION_COMMAND:
+                    free_ast(exp->data.command.command);
+                    break;
+                case EXPANSION_ARITHMETIC:
+                    free(exp->data.arithmetic.expression);
+                    break;
+                case EXPANSION_TILDE:
+                    if (exp->data.tilde.user) free(exp->data.tilde.user);
+                    break;
+                default:
+                    break;
+            }
+            break;
+        }
         case AST_PIPELINE:
             for (int i = 0; i < node->data.pipeline.command_count; i++) {
                 free_ast(node->data.pipeline.commands[i]);
@@ -2353,6 +2594,64 @@ void print_ast(ASTNode *node, int depth) {
                     printf("%s\n", node->data.simple_command.suffix[i]);
                 }
             }
+            if (node->data.simple_command.expansion_count > 0) {
+                for (int i = 0; i < depth + 1; i++) printf("  ");
+                printf("expansions:\n");
+                for (int i = 0; i < node->data.simple_command.expansion_count; i++) {
+                    for (int j = 0; j < depth + 2; j++) printf("  ");
+                    Expansion *exp = node->data.simple_command.expansions[i];
+                    switch (exp->type) {
+                        case EXPANSION_PARAMETER:
+                            printf("PARAMETER: %s\n", exp->data.parameter.name);
+                            break;
+                        case EXPANSION_SPECIAL:
+                            printf("SPECIAL: %s\n", exp->data.special.name);
+                            break;
+                        case EXPANSION_DEFAULT:
+                            printf("DEFAULT: %s :- %s (colon: %d)\n",
+                                   exp->data.default_exp.var, exp->data.default_exp.default_value,
+                                   exp->data.default_exp.is_colon);
+                            break;
+                        case EXPANSION_ASSIGN:
+                            printf("ASSIGN: %s := %s (colon: %d)\n",
+                                   exp->data.default_exp.var, exp->data.default_exp.default_value,
+                                   exp->data.default_exp.is_colon);
+                            break;
+                        case EXPANSION_SUBSTRING:
+                            printf("SUBSTRING: %s : %s", exp->data.substring.var, exp->data.substring.offset);
+                            if (exp->data.substring.length) printf(" : %s", exp->data.substring.length);
+                            printf("\n");
+                            break;
+                        case EXPANSION_LENGTH:
+                            printf("LENGTH: %s\n", exp->data.length.var);
+                            break;
+                        case EXPANSION_PREFIX_SHORT:
+                            printf("PREFIX_SHORT: %s # %s\n", exp->data.pattern.var, exp->data.pattern.pattern);
+                            break;
+                        case EXPANSION_PREFIX_LONG:
+                            printf("PREFIX_LONG: %s ## %s\n", exp->data.pattern.var, exp->data.pattern.pattern);
+                            break;
+                        case EXPANSION_SUFFIX_SHORT:
+                            printf("SUFFIX_SHORT: %s %% %s\n", exp->data.pattern.var, exp->data.pattern.pattern);
+                            break;
+                        case EXPANSION_SUFFIX_LONG:
+                            printf("SUFFIX_LONG: %s %%%% %s\n", exp->data.pattern.var, exp->data.pattern.pattern);
+                            break;
+                        case EXPANSION_COMMAND:
+                            printf("COMMAND:\n");
+                            print_ast(exp->data.command.command, depth + 3);
+                            break;
+                        case EXPANSION_ARITHMETIC:
+                            printf("ARITHMETIC: %s\n", exp->data.arithmetic.expression);
+                            break;
+                        case EXPANSION_TILDE:
+                            printf("TILDE: %s\n", exp->data.tilde.user ? exp->data.tilde.user : "");
+                            break;
+                        default:
+                            printf("UNKNOWN_EXPANSION\n");
+                    }
+                }
+            }
             if (node->data.simple_command.redirects) {
                 for (int i = 0; i < depth + 1; i++) printf("  ");
                 printf("redirects:\n");
@@ -2389,7 +2688,61 @@ void print_ast(ASTNode *node, int depth) {
                 }
             }
             break;
-
+        case AST_EXPANSION: {
+            Expansion *exp = &node->data.expansion;
+            switch (exp->type) {
+                case EXPANSION_PARAMETER:
+                    printf("AST_EXPANSION PARAMETER: %s\n", exp->data.parameter.name);
+                    break;
+                case EXPANSION_SPECIAL:
+                    printf("AST_EXPANSION SPECIAL: %s\n", exp->data.special.name);
+                    break;
+                case EXPANSION_DEFAULT:
+                    printf("AST_EXPANSION DEFAULT: %s :- %s (colon: %d)\n",
+                           exp->data.default_exp.var, exp->data.default_exp.default_value,
+                           exp->data.default_exp.is_colon);
+                    break;
+                case EXPANSION_ASSIGN:
+                    printf("AST_EXPANSION ASSIGN: %s := %s (colon: %d)\n",
+                           exp->data.default_exp.var, exp->data.default_exp.default_value,
+                           exp->data.default_exp.is_colon);
+                    break;
+                case EXPANSION_SUBSTRING:
+                    printf("AST_EXPANSION SUBSTRING: %s : %s", exp->data.substring.var, exp->data.substring.offset);
+                    if (exp->data.substring.length) printf(" : %s", exp->data.substring.length);
+                    printf("\n");
+                    break;
+                case EXPANSION_LENGTH:
+                    printf("AST_EXPANSION LENGTH: %s\n", exp->data.length.var);
+                    break;
+                case EXPANSION_PREFIX_SHORT:
+                    printf("AST_EXPANSION PREFIX_SHORT: %s # %s\n", exp->data.pattern.var, exp->data.pattern.pattern);
+                    break;
+                case EXPANSION_PREFIX_LONG:
+                    printf("AST_EXPANSION PREFIX_LONG: %s ## %s\n", exp->data.pattern.var, exp->data.pattern.pattern);
+                    break;
+                case EXPANSION_SUFFIX_SHORT:
+                    printf("AST_EXPANSION SUFFIX_SHORT: %s %% %s\n", exp->data.pattern.var, exp->data.pattern.pattern);
+                    break;
+                case EXPANSION_SUFFIX_LONG:
+                    printf("AST_EXPANSION SUFFIX_LONG: %s %%%% %s\n", exp->data.pattern.var, exp->data.pattern.pattern);
+                    break;
+                case EXPANSION_COMMAND:
+                    printf("AST_EXPANSION COMMAND:\n");
+                    print_ast(exp->data.command.command, depth + 1);
+                    break;
+                case EXPANSION_ARITHMETIC:
+                    printf("AST_EXPANSION ARITHMETIC: %s\n", exp->data.arithmetic.expression);
+                    break;
+                case EXPANSION_TILDE:
+                    printf("AST_EXPANSION TILDE: %s\n", exp->data.tilde.user ? exp->data.tilde.user : "");
+                    break;
+                default:
+                    printf("AST_EXPANSION UNKNOWN\n");
+            }
+            break;
+        }
+		
         case AST_PIPELINE:
             printf("AST_PIPELINE (bang: %d)\n", node->data.pipeline.bang);
             for (int i = 0; i < node->data.pipeline.command_count; i++) {
