@@ -564,15 +564,21 @@ void free_parser_state(ParserState *state) {
     state->token_capacity = 0;
     state->pos = 0;
 }
-
 static Redirect *parse_redirect_list(ParserState *state) {
     Redirect *head = NULL, *tail = NULL;
-    while (state->pos < state->token_count && (state->tokens[state->pos].type == IO_NUMBER || state->tokens[state->pos].type == LESS || 
-           state->tokens[state->pos].type == GREAT || state->tokens[state->pos].type == DLESS || state->tokens[state->pos].type == DGREAT || 
-           state->tokens[state->pos].type == LESSAND || state->tokens[state->pos].type == GREATAND || state->tokens[state->pos].type == LESSGREAT || 
-           state->tokens[state->pos].type == CLOBBER)) {
+    while (state->pos < state->token_count && (state->tokens[state->pos].type == IO_NUMBER ||
+           state->tokens[state->pos].type == LESS || state->tokens[state->pos].type == GREAT ||
+           state->tokens[state->pos].type == DLESS || state->tokens[state->pos].type == DGREAT ||
+           state->tokens[state->pos].type == LESSAND || state->tokens[state->pos].type == GREATAND ||
+           state->tokens[state->pos].type == LESSGREAT || state->tokens[state->pos].type == CLOBBER ||
+           state->tokens[state->pos].type == DLESSDASH)) {
         Redirect *redir = malloc(sizeof(Redirect));
         redir->io_number = NULL;
+        redir->filename = NULL;
+        redir->delimiter = NULL;
+        redir->heredoc_content = NULL;
+        redir->is_quoted = 0;
+        redir->is_dash = 0;
         redir->next = NULL;
 
         if (state->tokens[state->pos].type == IO_NUMBER) {
@@ -580,9 +586,11 @@ static Redirect *parse_redirect_list(ParserState *state) {
             (state->pos)++;
         }
 
-        if (state->pos >= state->token_count || (state->tokens[state->pos].type != LESS && state->tokens[state->pos].type != GREAT && 
-            state->tokens[state->pos].type != DLESS && state->tokens[state->pos].type != DGREAT && state->tokens[state->pos].type != LESSAND && 
-            state->tokens[state->pos].type != GREATAND && state->tokens[state->pos].type != LESSGREAT && state->tokens[state->pos].type != CLOBBER)) {
+        if (state->pos >= state->token_count || (state->tokens[state->pos].type != LESS &&
+            state->tokens[state->pos].type != GREAT && state->tokens[state->pos].type != DLESS &&
+            state->tokens[state->pos].type != DGREAT && state->tokens[state->pos].type != LESSAND &&
+            state->tokens[state->pos].type != GREATAND && state->tokens[state->pos].type != LESSGREAT &&
+            state->tokens[state->pos].type != CLOBBER && state->tokens[state->pos].type != DLESSDASH)) {
             fprintf(stderr, "Error: Expected redirect operator after IO_NUMBER\n");
             free(redir->io_number);
             free(redir);
@@ -590,6 +598,8 @@ static Redirect *parse_redirect_list(ParserState *state) {
                 Redirect *next = head->next;
                 free(head->io_number);
                 free(head->filename);
+                free(head->delimiter);
+                free(head->heredoc_content);
                 free(head);
                 head = next;
             }
@@ -600,19 +610,50 @@ static Redirect *parse_redirect_list(ParserState *state) {
         (state->pos)++;
 
         if (state->pos >= state->token_count || state->tokens[state->pos].type != WORD) {
-            fprintf(stderr, "Error: Expected filename after redirect operator\n");
+            fprintf(stderr, "Error: Expected filename or delimiter after redirect operator\n");
             free(redir->io_number);
             free(redir);
             while (head) {
                 Redirect *next = head->next;
                 free(head->io_number);
                 free(head->filename);
+                free(head->delimiter);
+                free(head->heredoc_content);
                 free(head);
                 head = next;
             }
             return NULL;
         }
-        redir->filename = strdup(state->tokens[state->pos].text);
+
+        if (redir->operator == DLESS || redir->operator == DLESSDASH) {
+            redir->is_dash = (redir->operator == DLESSDASH);
+            // Split token into delimiter and content
+            char *token_text = state->tokens[state->pos].text;
+            char *nl = strchr(token_text, '\n');
+            if (!nl) {
+                fprintf(stderr, "Error: Invalid heredoc format\n");
+                free(redir->io_number);
+                free(redir);
+                while (head) {
+                    Redirect *next = head->next;
+                    free(head->io_number);
+                    free(head->filename);
+                    free(head->delimiter);
+                    free(head->heredoc_content);
+                    free(head);
+                    head = next;
+                }
+                return NULL;
+            }
+            *nl = '\0';
+            redir->delimiter = strdup(token_text);
+            redir->heredoc_content = strdup(nl + 1);
+            *nl = '\n';
+            // Check if delimiter was quoted (simplified, assumes tokenizer tracked it)
+            redir->is_quoted = (token_text[0] == '\'' || token_text[0] == '"');
+        } else {
+            redir->filename = strdup(state->tokens[state->pos].text);
+        }
         (state->pos)++;
 
         if (!head) {
@@ -1644,54 +1685,232 @@ int has_redirects(Redirect *redirects) {
 }
 
 ExecStatus execute_ast(ASTNode *node, Environment *env, FunctionTable *ft, int *last_exit_status) {
-    if (!node) return EXEC_NORMAL;
+    if (!node) {
+        *last_exit_status = 0;
+        return EXEC_NORMAL;
+    }
 
     switch (node->type) {
-        case AST_SIMPLE_COMMAND:
+        case AST_SIMPLE_COMMAND: {
+            // Check for redirections, including heredocs
+            Redirect *redir = node->data.simple_command.redirects;
+            while (redir) {
+                if (redir->operator == DLESS || redir->operator == DLESSDASH) {
+                    fprintf(stderr, "Error: Heredocs not supported by sh23\n");
+                    *last_exit_status = 1;
+                    return EXEC_NORMAL;
+                }
+                if (redir->operator == LESS || redir->operator == GREAT ||
+                    redir->operator == DGREAT || redir->operator == LESSAND ||
+                    redir->operator == GREATAND || redir->operator == LESSGREAT ||
+                    redir->operator == CLOBBER) {
+                    fprintf(stderr, "Error: I/O redirection not supported by sh23\n");
+                    *last_exit_status = 1;
+                    return EXEC_NORMAL;
+                }
+                redir = redir->next;
+            }
             return execute_simple_command(node, env, ft, last_exit_status);
+        }
+
         case AST_PIPELINE: {
+            // Reject pipelines with multiple commands
+            if (node->data.pipeline.command_count > 1) {
+                fprintf(stderr, "Error: Pipelines (|) not supported by sh23\n");
+                *last_exit_status = 1;
+                return EXEC_NORMAL;
+            }
+            ExecStatus status = EXEC_NORMAL;
             int bang = node->data.pipeline.bang;
             for (int i = 0; i < node->data.pipeline.command_count; i++) {
-                ExecStatus status = execute_ast(node->data.pipeline.commands[i], env, ft, last_exit_status);
-                if (status == EXEC_RETURN) return EXEC_RETURN;
+                status = execute_ast(node->data.pipeline.commands[i], env, ft, last_exit_status);
+                if (status != EXEC_NORMAL) {
+                    break;
+                }
             }
-            if (bang) *last_exit_status = !(*last_exit_status);
-            return EXEC_NORMAL;
+            if (bang) {
+                *last_exit_status = !(*last_exit_status);
+            }
+            return status;
         }
+
         case AST_AND_OR: {
-            ExecStatus left_status = execute_ast(node->data.and_or.left, env, ft, last_exit_status);
-            if (left_status == EXEC_RETURN) return EXEC_RETURN;
-            int execute_right = (node->data.and_or.operator == AND_IF && *last_exit_status == 0) ||
-                                (node->data.and_or.operator == OR_IF && *last_exit_status != 0);
-            if (execute_right) {
-                return execute_ast(node->data.and_or.right, env, ft, last_exit_status);
+            ExecStatus status = execute_ast(node->data.and_or.left, env, ft, last_exit_status);
+            if (status != EXEC_NORMAL) {
+                return status;
             }
-            return EXEC_NORMAL;
+            if ((node->data.and_or.operator == AND_IF && *last_exit_status == 0) ||
+                (node->data.and_or.operator == OR_IF && *last_exit_status != 0)) {
+                status = execute_ast(node->data.and_or.right, env, ft, last_exit_status);
+            }
+            return status;
         }
+
         case AST_LIST: {
-            ExecStatus status = execute_ast(node->data.list.and_or, env, ft, last_exit_status);
-            if (status == EXEC_RETURN) return EXEC_RETURN;
-            if (node->data.list.next) {
-                return execute_ast(node->data.list.next, env, ft, last_exit_status);
+            // Reject background execution
+            if (node->data.list.separator == AMP) {
+                fprintf(stderr, "Error: Background execution (&) not supported by sh23\n");
+                *last_exit_status = 1;
+                return EXEC_NORMAL;
             }
+            ExecStatus status = execute_ast(node->data.list.and_or, env, ft, last_exit_status);
+            if (status != EXEC_NORMAL) {
+                return status;
+            }
+            if (node->data.list.next) {
+                status = execute_ast(node->data.list.next, env, ft, last_exit_status);
+            }
+            return status;
+        }
+
+        case AST_COMPLETE_COMMAND: {
+            ExecStatus status = execute_ast(node->data.complete_command.list, env, ft, last_exit_status);
+            return status;
+        }
+
+        case AST_PROGRAM: {
+            return execute_ast(node->data.program.commands, env, ft, last_exit_status);
+        }
+
+        case AST_IF_CLAUSE: {
+            ExecStatus status = execute_ast(node->data.if_clause.condition, env, ft, last_exit_status);
+            if (status != EXEC_NORMAL) {
+                return status;
+            }
+            if (*last_exit_status == 0) {
+                status = execute_ast(node->data.if_clause.then_body, env, ft, last_exit_status);
+            } else if (node->data.if_clause.else_part) {
+                status = execute_ast(node->data.if_clause.else_part, env, ft, last_exit_status);
+            }
+            return status;
+        }
+
+        case AST_FOR_CLAUSE: {
+            char wordlist[MAX_COMMAND_LEN];
+            wordlist[0] = '\0';
+            for (int i = 0; i < node->data.for_clause.wordlist_count; i++) {
+                char *expanded = expand_assignment(node->data.for_clause.wordlist[i], env, ft, last_exit_status);
+                strncat(wordlist, expanded, MAX_COMMAND_LEN - strlen(wordlist) - 1);
+                strncat(wordlist, " ", MAX_COMMAND_LEN - strlen(wordlist) - 1);
+                free(expanded);
+            }
+            char *word = strtok(wordlist, " ");
+            while (word) {
+                char assignment[MAX_TOKEN_LEN];
+                snprintf(assignment, MAX_TOKEN_LEN, "%s=%s", node->data.for_clause.variable, word);
+                set_variable(env, assignment);
+                ExecStatus status = execute_ast(node->data.for_clause.body, env, ft, last_exit_status);
+                if (status != EXEC_NORMAL) {
+                    return status;
+                }
+                word = strtok(NULL, " ");
+            }
+            *last_exit_status = 0;
             return EXEC_NORMAL;
         }
-        case AST_COMPLETE_COMMAND:
-            return execute_ast(node->data.complete_command.list, env, ft, last_exit_status);
-        case AST_PROGRAM:
-            return execute_ast(node->data.program.commands, env, ft, last_exit_status);
+
+        case AST_CASE_CLAUSE: {
+            char *word = expand_assignment(node->data.case_clause.word, env, ft, last_exit_status);
+            CaseItem *item = node->data.case_clause.items;
+            int matched = 0;
+            while (item && !matched) {
+                for (int i = 0; i < item->pattern_count; i++) {
+                    char *pattern = item->patterns[i];
+                    if (strcmp(word, pattern) == 0) {
+                        matched = 1;
+                        ExecStatus status = execute_ast(item->action, env, ft, last_exit_status);
+                        if (status != EXEC_NORMAL) {
+                            free(word);
+                            return status;
+                        }
+                        break;
+                    }
+                }
+                item = item->next;
+            }
+            free(word);
+            *last_exit_status = 0;
+            return EXEC_NORMAL;
+        }
+
+        case AST_WHILE_CLAUSE: {
+            while (1) {
+                ExecStatus status = execute_ast(node->data.while_clause.condition, env, ft, last_exit_status);
+                if (status != EXEC_NORMAL) {
+                    return status;
+                }
+                if (*last_exit_status != 0) {
+                    break;
+                }
+                status = execute_ast(node->data.while_clause.body, env, ft, last_exit_status);
+                if (status != EXEC_NORMAL) {
+                    return status;
+                }
+            }
+            *last_exit_status = 0;
+            return EXEC_NORMAL;
+        }
+
+        case AST_UNTIL_CLAUSE: {
+            while (1) {
+                ExecStatus status = execute_ast(node->data.until_clause.condition, env, ft, last_exit_status);
+                if (status != EXEC_NORMAL) {
+                    return status;
+                }
+                if (*last_exit_status == 0) {
+                    break;
+                }
+                status = execute_ast(node->data.until_clause.body, env, ft, last_exit_status);
+                if (status != EXEC_NORMAL) {
+                    return status;
+                }
+            }
+            *last_exit_status = 0;
+            return EXEC_NORMAL;
+        }
+
+        case AST_BRACE_GROUP: {
+            return execute_ast(node->data.brace_group.body, env, ft, last_exit_status);
+        }
+
+        case AST_SUBSHELL: {
+            // Note: No fork, so execute in current environment
+            return execute_ast(node->data.subshell.body, env, ft, last_exit_status);
+        }
+
         case AST_FUNCTION_DEFINITION: {
+            // Check for redirections, including heredocs
+            Redirect *redir = node->data.function_definition.redirects;
+            while (redir) {
+                if (redir->operator == DLESS || redir->operator == DLESSDASH) {
+                    fprintf(stderr, "Error: Heredocs not supported by sh23\n");
+                    *last_exit_status = 1;
+                    return EXEC_NORMAL;
+                }
+                if (redir->operator == LESS || redir->operator == GREAT ||
+                    redir->operator == DGREAT || redir->operator == LESSAND ||
+                    redir->operator == GREATAND || redir->operator == LESSGREAT ||
+                    redir->operator == CLOBBER) {
+                    fprintf(stderr, "Error: I/O redirection not supported by sh23\n");
+                    *last_exit_status = 1;
+                    return EXEC_NORMAL;
+                }
+                redir = redir->next;
+            }
+            // Store function in FunctionTable
             for (int i = 0; i < ft->func_count; i++) {
                 if (strcmp(ft->functions[i].name, node->data.function_definition.name) == 0) {
                     free(ft->functions[i].name);
                     free_ast(ft->functions[i].body);
-                    Redirect *redir = ft->functions[i].redirects;
-                    while (redir) {
-                        Redirect *next = redir->next;
-                        free(redir->io_number);
-                        free(redir->filename);
-                        free(redir);
-                        redir = next;
+                    Redirect *r = ft->functions[i].redirects;
+                    while (r) {
+                        free(r->io_number);
+                        free(r->filename);
+                        free(r->delimiter);
+                        free(r->heredoc_content);
+                        Redirect *next = r->next;
+                        free(r);
+                        r = next;
                     }
                     ft->functions[i] = ft->functions[ft->func_count - 1];
                     ft->func_count--;
@@ -1699,8 +1918,8 @@ ExecStatus execute_ast(ASTNode *node, Environment *env, FunctionTable *ft, int *
                 }
             }
             if (ft->func_count >= ft->func_capacity) {
-                ft->func_capacity *= 2;
-                ft->functions = realloc(ft->functions, ft->func_capacity * sizeof(FunctionEntry));
+                ft->func_capacity = (ft->func_capacity == 0) ? 8 : ft->func_capacity * 2;
+                ft->functions = realloc(ft->functions, ft->func_capacity * sizeof(Function));
             }
             ft->functions[ft->func_count].name = strdup(node->data.function_definition.name);
             ft->functions[ft->func_count].body = node->data.function_definition.body;
@@ -1710,67 +1929,20 @@ ExecStatus execute_ast(ASTNode *node, Environment *env, FunctionTable *ft, int *
             *last_exit_status = 0;
             return EXEC_NORMAL;
         }
-        case AST_IF_CLAUSE:
-            execute_ast(node->data.if_clause.condition, env, ft, last_exit_status);
-            if (*last_exit_status == 0) {
-                execute_ast(node->data.if_clause.then_body, env, ft, last_exit_status);
-            } else if (node->data.if_clause.else_part) {
-                execute_ast(node->data.if_clause.else_part, env, ft, last_exit_status);
+
+        case AST_IO_REDIRECT: {
+            if (node->data.io_redirect.operator == DLESS || node->data.io_redirect.operator == DLESSDASH) {
+                fprintf(stderr, "Error: Heredocs not supported by sh23\n");
+                *last_exit_status = 1;
+                return EXEC_NORMAL;
             }
-            break;
-        case AST_FOR_CLAUSE:
-            for (int i = 0; i < node->data.for_clause.wordlist_count; i++) {
-                char *assignment = malloc(strlen(node->data.for_clause.variable) + strlen(node->data.for_clause.wordlist[i]) + 2);
-                sprintf(assignment, "%s=%s", node->data.for_clause.variable, node->data.for_clause.wordlist[i]);
-                set_variable(env, assignment);
-                free(assignment);
-                execute_ast(node->data.for_clause.body, env, ft, last_exit_status);
-            }
-            break;
-        case AST_CASE_CLAUSE:
-            {
-                char *word = expand_assignment(node->data.case_clause.word, env, ft, last_exit_status);
-                char *equals = strchr(word, '=');
-                if (equals) *equals = '\0';
-                CaseItem *item = node->data.case_clause.items;
-                while (item) {
-                    for (int i = 0; i < item->pattern_count; i++) {
-                        if (strcmp(equals ? equals + 1 : word, item->patterns[i]) == 0) {
-                            if (item->action) execute_ast(item->action, env, ft, last_exit_status);
-                            free(word);
-                            return EXEC_NORMAL;
-                        }
-                    }
-                    item = item->next;
-                }
-                free(word);
-            }
-            break;
-        case AST_WHILE_CLAUSE:
-            while (1) {
-                execute_ast(node->data.while_clause.condition, env, ft, last_exit_status);
-                if (*last_exit_status != 0) break;
-                execute_ast(node->data.while_clause.body, env, ft, last_exit_status);
-            }
-            break;
-        case AST_UNTIL_CLAUSE:
-            while (1) {
-                execute_ast(node->data.until_clause.condition, env, ft, last_exit_status);
-                if (*last_exit_status == 0) break;
-                execute_ast(node->data.until_clause.body, env, ft, last_exit_status);
-            }
-            break;
-        case AST_BRACE_GROUP:
-            execute_ast(node->data.brace_group.body, env, ft, last_exit_status);
-            break;
-        case AST_SUBSHELL:
-            execute_ast(node->data.subshell.body, env, ft, last_exit_status);
-            break;
-        case AST_IO_REDIRECT:
-            fprintf(stderr, "Error: Standalone I/O redirection not supported in C23\n");
+            fprintf(stderr, "Error: I/O redirection not supported by sh23\n");
             *last_exit_status = 1;
-            break;
+            return EXEC_NORMAL;
+        }
+
         default:
+            fprintf(stderr, "Error: Unknown AST node type\n");
             *last_exit_status = 1;
             return EXEC_NORMAL;
     }
@@ -1892,238 +2064,423 @@ void execute_ast(ASTNode *ast, Environment *env, FunctionTable *ft, int *last_ex
 }
 #endif
 
+
 void free_ast(ASTNode *node) {
     if (!node) return;
+
     switch (node->type) {
         case AST_SIMPLE_COMMAND:
-            for (int i = 0; i < node->data.simple_command.prefix_count; i++) free(node->data.simple_command.prefix[i]);
+            for (int i = 0; i < node->data.simple_command.prefix_count; i++) {
+                free(node->data.simple_command.prefix[i]);
+            }
             free(node->data.simple_command.prefix);
-            if (node->data.simple_command.command) free(node->data.simple_command.command);
-            for (int i = 0; i < node->data.simple_command.suffix_count; i++) free(node->data.simple_command.suffix[i]);
+            if (node->data.simple_command.command) {
+                free(node->data.simple_command.command);
+            }
+            for (int i = 0; i < node->data.simple_command.suffix_count; i++) {
+                free(node->data.simple_command.suffix[i]);
+            }
             free(node->data.simple_command.suffix);
-            Redirect *redir = node->data.simple_command.redirects;
-            while (redir) {
-                free(redir->io_number);
-                free(redir->filename);
-                Redirect *next = redir->next;
-                free(redir);
-                redir = next;
+            {
+                Redirect *redir = node->data.simple_command.redirects;
+                while (redir) {
+                    free(redir->io_number);
+                    free(redir->filename);
+                    free(redir->delimiter);
+                    free(redir->heredoc_content);
+                    Redirect *next = redir->next;
+                    free(redir);
+                    redir = next;
+                }
             }
             break;
+
         case AST_PIPELINE:
-            for (int i = 0; i < node->data.pipeline.command_count; i++) free_ast(node->data.pipeline.commands[i]);
+            for (int i = 0; i < node->data.pipeline.command_count; i++) {
+                free_ast(node->data.pipeline.commands[i]);
+            }
             free(node->data.pipeline.commands);
             break;
+
         case AST_AND_OR:
             free_ast(node->data.and_or.left);
             free_ast(node->data.and_or.right);
             break;
+
         case AST_LIST:
             free_ast(node->data.list.and_or);
             free_ast(node->data.list.next);
             break;
+
         case AST_COMPLETE_COMMAND:
             free_ast(node->data.complete_command.list);
             break;
+
         case AST_PROGRAM:
             free_ast(node->data.program.commands);
             break;
+
         case AST_IF_CLAUSE:
             free_ast(node->data.if_clause.condition);
             free_ast(node->data.if_clause.then_body);
             free_ast(node->data.if_clause.else_part);
             break;
+
         case AST_FOR_CLAUSE:
-            if (node->data.for_clause.variable) free(node->data.for_clause.variable);
-            for (int i = 0; i < node->data.for_clause.wordlist_count; i++) free(node->data.for_clause.wordlist[i]);
+            free(node->data.for_clause.variable);
+            for (int i = 0; i < node->data.for_clause.wordlist_count; i++) {
+                free(node->data.for_clause.wordlist[i]);
+            }
             free(node->data.for_clause.wordlist);
             free_ast(node->data.for_clause.body);
             break;
+
         case AST_CASE_CLAUSE:
-            if (node->data.case_clause.word) free(node->data.case_clause.word);
-            CaseItem *item = node->data.case_clause.items;
-            while (item) {
-                for (int i = 0; i < item->pattern_count; i++) free(item->patterns[i]);
-                free(item->patterns);
-                free_ast(item->action);
-                CaseItem *next = item->next;
-                free(item);
-                item = next;
+            free(node->data.case_clause.word);
+            {
+                CaseItem *item = node->data.case_clause.items;
+                while (item) {
+                    for (int i = 0; i < item->pattern_count; i++) {
+                        free(item->patterns[i]);
+                    }
+                    free(item->patterns);
+                    free_ast(item->action);
+                    CaseItem *next = item->next;
+                    free(item);
+                    item = next;
+                }
             }
             break;
+
         case AST_WHILE_CLAUSE:
             free_ast(node->data.while_clause.condition);
             free_ast(node->data.while_clause.body);
             break;
+
         case AST_UNTIL_CLAUSE:
             free_ast(node->data.until_clause.condition);
             free_ast(node->data.until_clause.body);
             break;
+
         case AST_BRACE_GROUP:
             free_ast(node->data.brace_group.body);
             break;
+
         case AST_SUBSHELL:
             free_ast(node->data.subshell.body);
             break;
+
         case AST_FUNCTION_DEFINITION:
             free(node->data.function_definition.name);
             free_ast(node->data.function_definition.body);
-            redir = node->data.function_definition.redirects;
-            while (redir) {
-                free(redir->io_number);
-                free(redir->filename);
-                Redirect *next = redir->next;
-                free(redir);
-                redir = next;
+            {
+                Redirect *redir = node->data.function_definition.redirects;
+                while (redir) {
+                    free(redir->io_number);
+                    free(redir->filename);
+                    free(redir->delimiter);
+                    free(redir->heredoc_content);
+                    Redirect *next = redir->next;
+                    free(redir);
+                    redir = next;
+                }
             }
             break;
+
         case AST_IO_REDIRECT:
             free(node->data.io_redirect.io_number);
             free(node->data.io_redirect.filename);
+            free(node->data.io_redirect.delimiter);
+            free(node->data.io_redirect.heredoc_content);
+            break;
+
+        default:
+            // Unknown node types are freed without specific handling
             break;
     }
+
     free(node);
 }
 
-
 void print_ast(ASTNode *node, int depth) {
-    if (!node) return;
+    if (!node) {
+        for (int i = 0; i < depth; i++) printf("  ");
+        printf("NULL\n");
+        return;
+    }
+
     for (int i = 0; i < depth; i++) printf("  ");
     switch (node->type) {
         case AST_SIMPLE_COMMAND:
-            printf("SIMPLE_COMMAND\n");
-            for (int i = 0; i < node->data.simple_command.prefix_count; i++) {
-                for (int j = 0; j < depth + 1; j++) printf("  ");
-                printf("PREFIX: %s\n", node->data.simple_command.prefix[i]);
+            printf("AST_SIMPLE_COMMAND\n");
+            if (node->data.simple_command.prefix_count > 0) {
+                for (int i = 0; i < depth + 1; i++) printf("  ");
+                printf("prefix:\n");
+                for (int i = 0; i < node->data.simple_command.prefix_count; i++) {
+                    for (int j = 0; j < depth + 2; j++) printf("  ");
+                    printf("%s\n", node->data.simple_command.prefix[i]);
+                }
             }
             if (node->data.simple_command.command) {
                 for (int i = 0; i < depth + 1; i++) printf("  ");
-                printf("COMMAND: %s\n", node->data.simple_command.command);
+                printf("command: %s\n", node->data.simple_command.command);
             }
-            for (int i = 0; i < node->data.simple_command.suffix_count; i++) {
-                for (int j = 0; j < depth + 1; j++) printf("  ");
-                printf("SUFFIX: %s\n", node->data.simple_command.suffix[i]);
-            }
-            Redirect *redir = node->data.simple_command.redirects;
-            while (redir) {
+            if (node->data.simple_command.suffix_count > 0) {
                 for (int i = 0; i < depth + 1; i++) printf("  ");
-                printf("REDIRECT: %s%s %s\n", redir->io_number ? redir->io_number : "",
-                       redir->operator == LESS ? "<" : redir->operator == GREAT ? ">" : "??", redir->filename);
-                redir = redir->next;
+                printf("suffix:\n");
+                for (int i = 0; i < node->data.simple_command.suffix_count; i++) {
+                    for (int j = 0; j < depth + 2; j++) printf("  ");
+                    printf("%s\n", node->data.simple_command.suffix[i]);
+                }
+            }
+            if (node->data.simple_command.redirects) {
+                for (int i = 0; i < depth + 1; i++) printf("  ");
+                printf("redirects:\n");
+                Redirect *redir = node->data.simple_command.redirects;
+                while (redir) {
+                    for (int j = 0; j < depth + 2; j++) printf("  ");
+                    const char *op_str = "UNKNOWN";
+                    switch (redir->operator) {
+                        case LESS: op_str = "<"; break;
+                        case GREAT: op_str = ">"; break;
+                        case DGREAT: op_str = ">>"; break;
+                        case DLESS: op_str = "<<"; break;
+                        case DLESSDASH: op_str = "<<-"; break;
+                        case LESSAND: op_str = "<&"; break;
+                        case GREATAND: op_str = ">&"; break;
+                        case LESSGREAT: op_str = "<>"; break;
+                        case CLOBBER: op_str = ">|"; break;
+                        default: break;
+                    }
+                    printf("operator: %s", op_str);
+                    if (redir->io_number) printf(", io_number: %s", redir->io_number);
+                    if (redir->filename) printf(", filename: %s", redir->filename);
+                    if (redir->delimiter) printf(", delimiter: %s", redir->delimiter);
+                    if (redir->heredoc_content) {
+                        printf(", heredoc_content: \"");
+                        for (char *c = redir->heredoc_content; *c; c++) {
+                            if (*c == '\n') printf("\\n");
+                            else printf("%c", *c);
+                        }
+                        printf("\"");
+                    }
+                    printf(", is_quoted: %d, is_dash: %d\n", redir->is_quoted, redir->is_dash);
+                    redir = redir->next;
+                }
             }
             break;
+
         case AST_PIPELINE:
-            printf("PIPELINE (bang: %d)\n", node->data.pipeline.bang);
+            printf("AST_PIPELINE (bang: %d)\n", node->data.pipeline.bang);
             for (int i = 0; i < node->data.pipeline.command_count; i++) {
-                print_ast(node->data.pipeline.commands[i], depth + 1);
+                for (int j = 0; j < depth + 1; j++) printf("  ");
+                printf("command[%d]:\n", i);
+                print_ast(node->data.pipeline.commands[i], depth + 2);
             }
             break;
+
         case AST_AND_OR:
-            printf("AND_OR (%s)\n", node->data.and_or.operator == AND_IF ? "&&" : "||");
-            print_ast(node->data.and_or.left, depth + 1);
-            print_ast(node->data.and_or.right, depth + 1);
-            break;
-        case AST_LIST:
-            printf("LIST (sep: %s)\n", node->data.list.separator == SEMI ? ";" : node->data.list.separator == AMP ? "&" : node->data.list.separator == NEWLINE ? "\\n" : "none");
-            print_ast(node->data.list.and_or, depth + 1);
-            print_ast(node->data.list.next, depth + 1);
-            break;
-        case AST_COMPLETE_COMMAND:
-            printf("COMPLETE_COMMAND (sep: %s)\n", node->data.complete_command.separator == SEMI ? ";" : node->data.complete_command.separator == AMP ? "&" : "none");
-            print_ast(node->data.complete_command.list, depth + 1);
-            break;
-        case AST_PROGRAM:
-            printf("PROGRAM\n");
-            print_ast(node->data.program.commands, depth + 1);
-            break;
-        case AST_IF_CLAUSE:
-            printf("IF_CLAUSE\n");
+            printf("AST_AND_OR (operator: %s)\n",
+                   node->data.and_or.operator == AND_IF ? "&&" : "||");
             for (int i = 0; i < depth + 1; i++) printf("  ");
-            printf("CONDITION:\n");
+            printf("left:\n");
+            print_ast(node->data.and_or.left, depth + 2);
+            for (int i = 0; i < depth + 1; i++) printf("  ");
+            printf("right:\n");
+            print_ast(node->data.and_or.right, depth + 2);
+            break;
+
+        case AST_LIST:
+            printf("AST_LIST (separator: %s)\n",
+                   node->data.list.separator == SEMI ? ";" :
+                   node->data.list.separator == AMP ? "&" : "none");
+            for (int i = 0; i < depth + 1; i++) printf("  ");
+            printf("and_or:\n");
+            print_ast(node->data.list.and_or, depth + 2);
+            if (node->data.list.next) {
+                for (int i = 0; i < depth + 1; i++) printf("  ");
+                printf("next:\n");
+                print_ast(node->data.list.next, depth + 2);
+            }
+            break;
+
+        case AST_COMPLETE_COMMAND:
+            printf("AST_COMPLETE_COMMAND\n");
+            for (int i = 0; i < depth + 1; i++) printf("  ");
+            printf("list:\n");
+            print_ast(node->data.complete_command.list, depth + 2);
+            break;
+
+        case AST_PROGRAM:
+            printf("AST_PROGRAM\n");
+            for (int i = 0; i < depth + 1; i++) printf("  ");
+            printf("commands:\n");
+            print_ast(node->data.program.commands, depth + 2);
+            break;
+
+        case AST_IF_CLAUSE:
+            printf("AST_IF_CLAUSE\n");
+            for (int i = 0; i < depth + 1; i++) printf("  ");
+            printf("condition:\n");
             print_ast(node->data.if_clause.condition, depth + 2);
             for (int i = 0; i < depth + 1; i++) printf("  ");
-            printf("THEN:\n");
+            printf("then_body:\n");
             print_ast(node->data.if_clause.then_body, depth + 2);
             if (node->data.if_clause.else_part) {
                 for (int i = 0; i < depth + 1; i++) printf("  ");
-                printf("ELSE:\n");
+                printf("else_part:\n");
                 print_ast(node->data.if_clause.else_part, depth + 2);
             }
             break;
+
         case AST_FOR_CLAUSE:
-            printf("FOR_CLAUSE (var: %s)\n", node->data.for_clause.variable);
+            printf("AST_FOR_CLAUSE (variable: %s)\n", node->data.for_clause.variable);
             if (node->data.for_clause.wordlist_count > 0) {
                 for (int i = 0; i < depth + 1; i++) printf("  ");
-                printf("WORDLIST:");
+                printf("wordlist:\n");
                 for (int i = 0; i < node->data.for_clause.wordlist_count; i++) {
-                    printf(" %s", node->data.for_clause.wordlist[i]);
+                    for (int j = 0; j < depth + 2; j++) printf("  ");
+                    printf("%s\n", node->data.for_clause.wordlist[i]);
                 }
-                printf("\n");
             }
             for (int i = 0; i < depth + 1; i++) printf("  ");
-            printf("BODY:\n");
+            printf("body:\n");
             print_ast(node->data.for_clause.body, depth + 2);
             break;
+
         case AST_CASE_CLAUSE:
-            printf("CASE_CLAUSE (word: %s)\n", node->data.case_clause.word);
-            CaseItem *item = node->data.case_clause.items;
-            while (item) {
-                for (int i = 0; i < depth + 1; i++) printf("  ");
-                printf("ITEM (patterns:");
-                for (int j = 0; j < item->pattern_count; j++) {
-                    printf(" %s", item->patterns[j]);
+            printf("AST_CASE_CLAUSE (word: %s)\n", node->data.case_clause.word);
+            for (int i = 0; i < depth + 1; i++) printf("  ");
+            printf("items:\n");
+            {
+                CaseItem *item = node->data.case_clause.items;
+                while (item) {
+                    for (int j = 0; j < depth + 2; j++) printf("  ");
+                    printf("case_item (has_dsemi: %d):\n", item->has_dsemi);
+                    for (int j = 0; j < depth + 3; j++) printf("  ");
+                    printf("patterns:\n");
+                    for (int k = 0; k < item->pattern_count; k++) {
+                        for (int j = 0; j < depth + 4; j++) printf("  ");
+                        printf("%s\n", item->patterns[k]);
+                    }
+                    for (int j = 0; j < depth + 3; j++) printf("  ");
+                    printf("action:\n");
+                    print_ast(item->action, depth + 4);
+                    item = item->next;
                 }
-                printf(") (dsemi: %d)\n", item->has_dsemi);
-                if (item->action) print_ast(item->action, depth + 2);
-                item = item->next;
             }
             break;
+
         case AST_WHILE_CLAUSE:
-            printf("WHILE_CLAUSE\n");
+            printf("AST_WHILE_CLAUSE\n");
             for (int i = 0; i < depth + 1; i++) printf("  ");
-            printf("CONDITION:\n");
+            printf("condition:\n");
             print_ast(node->data.while_clause.condition, depth + 2);
             for (int i = 0; i < depth + 1; i++) printf("  ");
-            printf("BODY:\n");
+            printf("body:\n");
             print_ast(node->data.while_clause.body, depth + 2);
             break;
+
         case AST_UNTIL_CLAUSE:
-            printf("UNTIL_CLAUSE\n");
+            printf("AST_UNTIL_CLAUSE\n");
             for (int i = 0; i < depth + 1; i++) printf("  ");
-            printf("CONDITION:\n");
+            printf("condition:\n");
             print_ast(node->data.until_clause.condition, depth + 2);
             for (int i = 0; i < depth + 1; i++) printf("  ");
-            printf("BODY:\n");
+            printf("body:\n");
             print_ast(node->data.until_clause.body, depth + 2);
             break;
+
         case AST_BRACE_GROUP:
-            printf("BRACE_GROUP\n");
-            print_ast(node->data.brace_group.body, depth + 1);
+            printf("AST_BRACE_GROUP\n");
+            for (int i = 0; i < depth + 1; i++) printf("  ");
+            printf("body:\n");
+            print_ast(node->data.brace_group.body, depth + 2);
             break;
+
         case AST_SUBSHELL:
-            printf("SUBSHELL\n");
-            print_ast(node->data.subshell.body, depth + 1);
+            printf("AST_SUBSHELL\n");
+            for (int i = 0; i < depth + 1; i++) printf("  ");
+            printf("body:\n");
+            print_ast(node->data.subshell.body, depth + 2);
             break;
+
         case AST_FUNCTION_DEFINITION:
-            printf("FUNCTION_DEFINITION (name: %s)\n", node->data.function_definition.name);
-            print_ast(node->data.function_definition.body, depth + 1);
-            redir = node->data.function_definition.redirects;
-            while (redir) {
+            printf("AST_FUNCTION_DEFINITION (name: %s)\n", node->data.function_definition.name);
+            for (int i = 0; i < depth + 1; i++) printf("  ");
+            printf("body:\n");
+            print_ast(node->data.function_definition.body, depth + 2);
+            if (node->data.function_definition.redirects) {
                 for (int i = 0; i < depth + 1; i++) printf("  ");
-                printf("REDIRECT: %s%s %s\n", redir->io_number ? redir->io_number : "",
-                       redir->operator == LESS ? "<" : redir->operator == GREAT ? ">" : "??", redir->filename);
-                redir = redir->next;
+                printf("redirects:\n");
+                Redirect *redir = node->data.function_definition.redirects;
+                while (redir) {
+                    for (int j = 0; j < depth + 2; j++) printf("  ");
+                    const char *op_str = "UNKNOWN";
+                    switch (redir->operator) {
+                        case LESS: op_str = "<"; break;
+                        case GREAT: op_str = ">"; break;
+                        case DGREAT: op_str = ">>"; break;
+                        case DLESS: op_str = "<<"; break;
+                        case DLESSDASH: op_str = "<<-"; break;
+                        case LESSAND: op_str = "<&"; break;
+                        case GREATAND: op_str = ">&"; break;
+                        case LESSGREAT: op_str = "<>"; break;
+                        case CLOBBER: op_str = ">|"; break;
+                        default: break;
+                    }
+                    printf("operator: %s", op_str);
+                    if (redir->io_number) printf(", io_number: %s", redir->io_number);
+                    if (redir->filename) printf(", filename: %s", redir->filename);
+                    if (redir->delimiter) printf(", delimiter: %s", redir->delimiter);
+                    if (redir->heredoc_content) {
+                        printf(", heredoc_content: \"");
+                        for (char *c = redir->heredoc_content; *c; c++) {
+                            if (*c == '\n') printf("\\n");
+                            else printf("%c", *c);
+                        }
+                        printf("\"");
+                    }
+                    printf(", is_quoted: %d, is_dash: %d\n", redir->is_quoted, redir->is_dash);
+                    redir = redir->next;
+                }
             }
             break;
+
         case AST_IO_REDIRECT:
-            printf("IO_REDIRECT: %s%s %s\n", node->data.io_redirect.io_number ? node->data.io_redirect.io_number : "",
-                   node->data.io_redirect.operator == LESS ? "<" : node->data.io_redirect.operator == GREAT ? ">" : "??",
-                   node->data.io_redirect.filename);
+            printf("AST_IO_REDIRECT (operator: ");
+            switch (node->data.io_redirect.operator) {
+                case LESS: printf("<"); break;
+                case GREAT: printf(">"); break;
+                case DGREAT: printf(">>"); break;
+                case DLESS: printf("<<"); break;
+                case DLESSDASH: printf("<<-"); break;
+                case LESSAND: printf("<&"); break;
+                case GREATAND: printf(">&"); break;
+                case LESSGREAT: printf("<>"); break;
+                case CLOBBER: printf(">|"); break;
+                default: printf("UNKNOWN");
+            }
+            printf(")");
+            if (node->data.io_redirect.io_number) printf(", io_number: %s", node->data.io_redirect.io_number);
+            if (node->data.io_redirect.filename) printf(", filename: %s", node->data.io_redirect.filename);
+            if (node->data.io_redirect.delimiter) printf(", delimiter: %s", node->data.io_redirect.delimiter);
+            if (node->data.io_redirect.heredoc_content) {
+                printf(", heredoc_content: \"");
+                for (char *c = node->data.io_redirect.heredoc_content; *c; c++) {
+                    if (*c == '\n') printf("\\n");
+                    else printf("%c", *c);
+                }
+                printf("\"");
+            }
+            printf(", is_quoted: %d, is_dash: %d\n", node->data.io_redirect.is_quoted, node->data.io_redirect.is_dash);
+            break;
+
+        default:
+            printf("UNKNOWN_NODE\n");
             break;
     }
 }
-
-
 
 // Forward declaration for recursive evaluation
 static int evaluate_expression(int argc, char **argv, int start, int end, int *last_exit_status);
