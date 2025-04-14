@@ -743,316 +743,370 @@ static ASTNode *parse_simple_command(ParserState *state) {
 static ASTNode *parse_compound_list(ParserState *state);
 
 static ASTNode *parse_if_clause(ParserState *state) {
-    if (state->pos >= state->token_count || state->tokens[state->pos].type != IF) return NULL;
-    (state->pos)++;
+    if (state->pos >= state->token_count || state->tokens[state->pos].type != IF) {
+        return NULL;
+    }
+    state->pos++; // Consume IF
+
+    ASTNode *condition = parse_compound_list(state);
+    if (!condition && state->pos < state->token_count && state->tokens[state->pos].type == THEN) {
+        condition = malloc(sizeof(ASTNode));
+        condition->type = AST_LIST;
+        condition->data.list.and_or = NULL;
+        condition->data.list.separator = SEMI;
+        condition->data.list.next = NULL;
+    }
+    if (!condition) {
+        fprintf(stderr, "Error: Expected condition after 'if'\n");
+        return NULL;
+    }
+
+    if (state->pos >= state->token_count || state->tokens[state->pos].type != THEN) {
+        fprintf(stderr, "Error: Expected 'then' after condition\n");
+        free_ast(condition);
+        return NULL;
+    }
+    state->pos++; // Consume THEN
+
+    ASTNode *then_body = parse_compound_list(state);
+    if (!then_body) {
+        // Allow empty then body
+        then_body = malloc(sizeof(ASTNode));
+        then_body->type = AST_LIST;
+        then_body->data.list.and_or = NULL;
+        then_body->data.list.separator = SEMI;
+        then_body->data.list.next = NULL;
+    }
+
+    ASTNode *else_part = NULL;
+    if (state->pos < state->token_count && state->tokens[state->pos].type == ELSE) {
+        state->pos++; // Consume ELSE
+        else_part = parse_compound_list(state);
+        if (!else_part) {
+            // Allow empty else part
+            else_part = malloc(sizeof(ASTNode));
+            else_part->type = AST_LIST;
+            else_part->data.list.and_or = NULL;
+            else_part->data.list.separator = SEMI;
+            else_part->data.list.next = NULL;
+        }
+    } else if (state->pos < state->token_count && state->tokens[state->pos].type == ELIF) {
+        state->pos++; // Consume ELIF
+        else_part = parse_if_clause(state);
+    }
+
+    if (state->pos >= state->token_count || state->tokens[state->pos].type != FI) {
+        fprintf(stderr, "Error: Expected 'fi' to close 'if'\n");
+        free_ast(condition);
+        free_ast(then_body);
+        free_ast(else_part);
+        return NULL;
+    }
+    state->pos++; // Consume FI
 
     ASTNode *node = malloc(sizeof(ASTNode));
     node->type = AST_IF_CLAUSE;
-    node->data.if_clause.condition = parse_compound_list(state);
-
-    if (state->pos >= state->token_count || state->tokens[state->pos].type != THEN) {
-        fprintf(stderr, "Error: Expected 'then' in if clause\n");
-        state->expecting |= EXPECTING_FI;
-        free_ast(node);
-        return NULL;
-    }
-    (state->pos)++;
-
-    node->data.if_clause.then_body = parse_compound_list(state);
-    node->data.if_clause.else_part = NULL;
-
-    if (state->pos < state->token_count && (state->tokens[state->pos].type == ELSE || state->tokens[state->pos].type == ELIF)) {
-        if (state->tokens[state->pos].type == ELSE) {
-            (state->pos)++;
-            node->data.if_clause.else_part = parse_compound_list(state);
-        } else {
-            ASTNode *elif = malloc(sizeof(ASTNode));
-            elif->type = AST_IF_CLAUSE;
-            (state->pos)++;
-            elif->data.if_clause.condition = parse_compound_list(state);
-            if (state->pos >= state->token_count || state->tokens[state->pos].type != THEN) {
-                fprintf(stderr, "Error: Expected 'then' after 'elif'\n");
-                state->expecting |= EXPECTING_FI;
-                free_ast(elif);
-                free_ast(node);
-                return NULL;
-            }
-            (state->pos)++;
-            elif->data.if_clause.then_body = parse_compound_list(state);
-            elif->data.if_clause.else_part = NULL;
-            node->data.if_clause.else_part = elif;
-
-            if (state->pos < state->token_count && (state->tokens[state->pos].type == ELSE || state->tokens[state->pos].type == ELIF)) {
-                if (state->tokens[state->pos].type == ELSE) {
-                    (state->pos)++;
-                    elif->data.if_clause.else_part = parse_compound_list(state);
-                } else {
-                    ASTNode *nested_elif = parse_if_clause(state);
-                    if (nested_elif) {
-                        elif->data.if_clause.else_part = nested_elif;
-                        while (nested_elif->data.if_clause.else_part && nested_elif->data.if_clause.else_part->type == AST_IF_CLAUSE) {
-                            nested_elif = nested_elif->data.if_clause.else_part;
-                        }
-                        if (state->pos < state->token_count && state->tokens[state->pos].type == ELSE) {
-                            (state->pos)++;
-                            nested_elif->data.if_clause.else_part = parse_compound_list(state);
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    if (state->pos >= state->token_count) {
-        state->expecting |= EXPECTING_FI;
-        return node;
-    }
-    if (state->tokens[state->pos].type != FI) {
-        fprintf(stderr, "Error: Expected 'fi' in if clause\n");
-        state->expecting |= EXPECTING_FI;
-        free_ast(node);
-        return NULL;
-    }
-    (state->pos)++;
-    state->expecting &= ~EXPECTING_FI;
-
+    node->data.if_clause.condition = condition;
+    node->data.if_clause.then_body = then_body;
+    node->data.if_clause.else_part = else_part;
     return node;
 }
 
 static ASTNode *parse_for_clause(ParserState *state) {
-    if (state->pos >= state->token_count || state->tokens[state->pos].type != FOR) return NULL;
-    (state->pos)++;
-
-    ASTNode *node = malloc(sizeof(ASTNode));
-    node->type = AST_FOR_CLAUSE;
-    node->data.for_clause.variable = NULL;
-    node->data.for_clause.wordlist = NULL;
-    node->data.for_clause.wordlist_count = 0;
-    node->data.for_clause.body = NULL;
-
-    if (state->pos >= state->token_count || state->tokens[state->pos].type != NAME) {
-        fprintf(stderr, "Error: Expected variable name in for clause\n");
-        state->expecting |= EXPECTING_DONE;
-        free(node);
+    if (state->pos >= state->token_count || state->tokens[state->pos].type != FOR) {
         return NULL;
     }
-    node->data.for_clause.variable = strdup(state->tokens[state->pos].text);
-    (state->pos)++;
+    state->pos++; // Consume FOR
 
+    if (state->pos >= state->token_count || state->tokens[state->pos].type != NAME) {
+        fprintf(stderr, "Error: Expected variable name after 'for'\n");
+        return NULL;
+    }
+    char *variable = strdup(state->tokens[state->pos].text);
+    state->pos++; // Consume NAME
+
+    char **wordlist = NULL;
+    int wordlist_count = 0;
     if (state->pos < state->token_count && state->tokens[state->pos].type == IN) {
-        (state->pos)++;
+        state->pos++; // Consume IN
         while (state->pos < state->token_count && state->tokens[state->pos].type == WORD) {
-            node->data.for_clause.wordlist = realloc(node->data.for_clause.wordlist,
-                (node->data.for_clause.wordlist_count + 1) * sizeof(char *));
-            node->data.for_clause.wordlist[node->data.for_clause.wordlist_count] = strdup(state->tokens[state->pos].text);
-            node->data.for_clause.wordlist_count++;
-            (state->pos)++;
+            wordlist = realloc(wordlist, (wordlist_count + 1) * sizeof(char *));
+            wordlist[wordlist_count++] = strdup(state->tokens[state->pos].text);
+            state->pos++;
+        }
+        // Consume separator (;, newline)
+        while (state->pos < state->token_count &&
+               (state->tokens[state->pos].type == SEMI || state->tokens[state->pos].type == NEWLINE)) {
+            state->pos++;
+        }
+    } else {
+        // Default wordlist (e.g., "$@")
+        while (state->pos < state->token_count &&
+               (state->tokens[state->pos].type == SEMI || state->tokens[state->pos].type == NEWLINE)) {
+            state->pos++;
         }
     }
 
-    if (state->pos < state->token_count && state->tokens[state->pos].type == SEMI) (state->pos)++;
-
-    if (state->pos >= state->token_count) {
-        state->expecting |= EXPECTING_DONE;
-        return node;
-    }
-    if (state->tokens[state->pos].type != DO) {
-        fprintf(stderr, "Error: Expected 'do' in for clause\n");
-        state->expecting |= EXPECTING_DONE;
-        free_ast(node);
+    if (state->pos >= state->token_count || state->tokens[state->pos].type != DO) {
+        fprintf(stderr, "Error: Expected 'do' after 'for'\n");
+        free(variable);
+        for (int i = 0; i < wordlist_count; i++) free(wordlist[i]);
+        free(wordlist);
         return NULL;
     }
-    (state->pos)++;
+    state->pos++; // Consume DO
 
-    node->data.for_clause.body = parse_compound_list(state);
-
-    if (state->pos >= state->token_count) {
-        state->expecting |= EXPECTING_DONE;
-        return node;
+    ASTNode *body = parse_compound_list(state);
+    if (!body) {
+        // Allow empty body
+        body = malloc(sizeof(ASTNode));
+        body->type = AST_LIST;
+        body->data.list.and_or = NULL;
+        body->data.list.separator = SEMI;
+        body->data.list.next = NULL;
     }
-    if (state->tokens[state->pos].type != DONE) {
-        fprintf(stderr, "Error: Expected 'done' in for clause\n");
-        state->expecting |= EXPECTING_DONE;
-        free_ast(node);
+
+    if (state->pos >= state->token_count || state->tokens[state->pos].type != DONE) {
+        fprintf(stderr, "Error: Expected 'done' to close 'for'\n");
+        free(variable);
+        for (int i = 0; i < wordlist_count; i++) free(wordlist[i]);
+        free(wordlist);
+        free_ast(body);
         return NULL;
     }
-    (state->pos)++;
-    state->expecting &= ~EXPECTING_DONE;
+    state->pos++; // Consume DONE
 
+    ASTNode *node = malloc(sizeof(ASTNode));
+    node->type = AST_FOR_CLAUSE;
+    node->data.for_clause.variable = variable;
+    node->data.for_clause.wordlist = wordlist;
+    node->data.for_clause.wordlist_count = wordlist_count;
+    node->data.for_clause.body = body;
     return node;
 }
 
 static CaseItem *parse_case_item(ParserState *state) {
-    CaseItem *item = malloc(sizeof(CaseItem));
-    item->patterns = NULL;
-    item->pattern_count = 0;
-    item->action = NULL;
-    item->has_dsemi = 0;
-    item->next = NULL;
+    if (state->pos >= state->token_count || state->tokens[state->pos].type != LPAREN) {
+        return NULL;
+    }
+    state->pos++; // Consume LPAREN
 
-    if (state->pos < state->token_count && state->tokens[state->pos].type == LPAREN) (state->pos)++;
-
+    char **patterns = NULL;
+    int pattern_count = 0;
     while (state->pos < state->token_count && state->tokens[state->pos].type == WORD) {
-        item->patterns = realloc(item->patterns, (item->pattern_count + 1) * sizeof(char *));
-        item->patterns[item->pattern_count] = strdup(state->tokens[state->pos].text);
-        item->pattern_count++;
-        (state->pos)++;
-        if (state->pos < state->token_count && state->tokens[state->pos].type == PIPE) (state->pos)++;
+        patterns = realloc(patterns, (pattern_count + 1) * sizeof(char *));
+        patterns[pattern_count++] = strdup(state->tokens[state->pos].text);
+        state->pos++;
     }
 
     if (state->pos >= state->token_count || state->tokens[state->pos].type != RPAREN) {
-        fprintf(stderr, "Error: Expected ')' in case item\n");
-        state->expecting |= EXPECTING_ESAC;
-        free(item->patterns);
-        free(item);
+        fprintf(stderr, "Error: Expected ')' after case pattern\n");
+        for (int i = 0; i < pattern_count; i++) free(patterns[i]);
+        free(patterns);
         return NULL;
     }
-    (state->pos)++;
+    state->pos++; // Consume RPAREN
 
-    if (state->pos < state->token_count && state->tokens[state->pos].type != DSEMI) {
-        item->action = parse_compound_list(state);
+    ASTNode *action = parse_compound_list(state);
+    if (!action) {
+        // Allow empty action
+        action = malloc(sizeof(ASTNode));
+        action->type = AST_LIST;
+        action->data.list.and_or = NULL;
+        action->data.list.separator = SEMI;
+        action->data.list.next = NULL;
     }
 
+    int has_dsemi = 0;
     if (state->pos < state->token_count && state->tokens[state->pos].type == DSEMI) {
-        item->has_dsemi = 1;
-        (state->pos)++;
+        has_dsemi = 1;
+        state->pos++; // Consume DSEMI
     }
 
+    CaseItem *item = malloc(sizeof(CaseItem));
+    item->patterns = patterns;
+    item->pattern_count = pattern_count;
+    item->action = action;
+    item->has_dsemi = has_dsemi;
+    item->next = NULL;
     return item;
 }
 
 static ASTNode *parse_case_clause(ParserState *state) {
-    if (state->pos >= state->token_count || state->tokens[state->pos].type != CASE) return NULL;
-    (state->pos)++;
-
-    ASTNode *node = malloc(sizeof(ASTNode));
-    node->type = AST_CASE_CLAUSE;
-    node->data.case_clause.word = NULL;
-    node->data.case_clause.items = NULL;
+    if (state->pos >= state->token_count || state->tokens[state->pos].type != CASE) {
+        return NULL;
+    }
+    state->pos++; // Consume CASE
 
     if (state->pos >= state->token_count || state->tokens[state->pos].type != WORD) {
-        fprintf(stderr, "Error: Expected word in case clause\n");
-        state->expecting |= EXPECTING_ESAC;
-        free(node);
+        fprintf(stderr, "Error: Expected word after 'case'\n");
         return NULL;
     }
-    node->data.case_clause.word = strdup(state->tokens[state->pos].text);
-    (state->pos)++;
+    char *word = strdup(state->tokens[state->pos].text);
+    state->pos++; // Consume WORD
 
     if (state->pos >= state->token_count || state->tokens[state->pos].type != IN) {
-        fprintf(stderr, "Error: Expected 'in' in case clause\n");
-        state->expecting |= EXPECTING_ESAC;
-        free_ast(node);
+        fprintf(stderr, "Error: Expected 'in' after case word\n");
+        free(word);
         return NULL;
     }
-    (state->pos)++;
+    state->pos++; // Consume IN
 
-    CaseItem *last_item = NULL;
+    // Skip newlines before items
+    while (state->pos < state->token_count && state->tokens[state->pos].type == NEWLINE) {
+        state->pos++;
+    }
+
+    CaseItem *items = NULL, *tail = NULL;
     while (state->pos < state->token_count && state->tokens[state->pos].type != ESAC) {
         CaseItem *item = parse_case_item(state);
         if (!item) {
-            fprintf(stderr, "Error: Failed to parse case item\n");
-            state->expecting |= EXPECTING_ESAC;
-            free_ast(node);
-            return NULL;
+            // Allow empty item (e.g., ;; alone)
+            if (state->pos < state->token_count && state->tokens[state->pos].type == DSEMI) {
+                item = malloc(sizeof(CaseItem));
+                item->patterns = NULL;
+                item->pattern_count = 0;
+                item->action = malloc(sizeof(ASTNode));
+                item->action->type = AST_LIST;
+                item->action->data.list.and_or = NULL;
+                item->action->data.list.separator = SEMI;
+                item->action->data.list.next = NULL;
+                item->has_dsemi = 1;
+                item->next = NULL;
+                state->pos++; // Consume DSEMI
+            } else {
+                break;
+            }
         }
-        if (!node->data.case_clause.items) {
-            node->data.case_clause.items = item;
+        if (!items) {
+            items = tail = item;
         } else {
-            last_item->next = item;
+            tail->next = item;
+            tail = item;
         }
-        last_item = item;
+        // Skip extra DSEMI
+        while (state->pos < state->token_count && state->tokens[state->pos].type == DSEMI) {
+            state->pos++;
+        }
+        // Skip newlines
+        while (state->pos < state->token_count && state->tokens[state->pos].type == NEWLINE) {
+            state->pos++;
+        }
     }
 
-    if (state->pos >= state->token_count) {
-        state->expecting |= EXPECTING_ESAC;
-        return node;
-    }
-    if (state->tokens[state->pos].type != ESAC) {
-        fprintf(stderr, "Error: Expected 'esac' in case clause\n");
-        state->expecting |= EXPECTING_ESAC;
-        free_ast(node);
+    if (state->pos >= state->token_count || state->tokens[state->pos].type != ESAC) {
+        fprintf(stderr, "Error: Expected 'esac' to close 'case'\n");
+        free(word);
+        while (items) {
+            CaseItem *next = items->next;
+            for (int i = 0; i < items->pattern_count; i++) free(items->patterns[i]);
+            free(items->patterns);
+            free_ast(items->action);
+            free(items);
+            items = next;
+        }
         return NULL;
     }
-    (state->pos)++;
-    state->expecting &= ~EXPECTING_ESAC;
+    state->pos++; // Consume ESAC
 
+    ASTNode *node = malloc(sizeof(ASTNode));
+    node->type = AST_CASE_CLAUSE;
+    node->data.case_clause.word = word;
+    node->data.case_clause.items = items;
     return node;
 }
 
 static ASTNode *parse_while_clause(ParserState *state) {
-    if (state->pos >= state->token_count || state->tokens[state->pos].type != WHILE) return NULL;
-    (state->pos)++;
+    if (state->pos >= state->token_count || state->tokens[state->pos].type != WHILE) {
+        return NULL;
+    }
+    state->pos++; // Consume WHILE
+
+    ASTNode *condition = parse_compound_list(state);
+    if (!condition) {
+        condition = malloc(sizeof(ASTNode));
+        condition->type = AST_LIST;
+        condition->data.list.and_or = NULL;
+        condition->data.list.separator = SEMI;
+        condition->data.list.next = NULL;
+    }
+
+    if (state->pos >= state->token_count || state->tokens[state->pos].type != DO) {
+        fprintf(stderr, "Error: Expected 'do' after while condition\n");
+        free_ast(condition);
+        return NULL;
+    }
+    state->pos++; // Consume DO
+
+    ASTNode *body = parse_compound_list(state);
+    if (!body) {
+        body = malloc(sizeof(ASTNode));
+        body->type = AST_LIST;
+        body->data.list.and_or = NULL;
+        body->data.list.separator = SEMI;
+        body->data.list.next = NULL;
+    }
+
+    if (state->pos >= state->token_count || state->tokens[state->pos].type != DONE) {
+        fprintf(stderr, "Error: Expected 'done' to close 'while'\n");
+        free_ast(condition);
+        free_ast(body);
+        return NULL;
+    }
+    state->pos++; // Consume DONE
 
     ASTNode *node = malloc(sizeof(ASTNode));
     node->type = AST_WHILE_CLAUSE;
-    node->data.while_clause.condition = parse_compound_list(state);
-
-    if (state->pos >= state->token_count) {
-        state->expecting |= EXPECTING_DONE;
-        return node;
-    }
-    if (state->tokens[state->pos].type != DO) {
-        fprintf(stderr, "Error: Expected 'do' in while clause\n");
-        state->expecting |= EXPECTING_DONE;
-        free_ast(node);
-        return NULL;
-    }
-    (state->pos)++;
-
-    node->data.while_clause.body = parse_compound_list(state);
-
-    if (state->pos >= state->token_count) {
-        state->expecting |= EXPECTING_DONE;
-        return node;
-    }
-    if (state->tokens[state->pos].type != DONE) {
-        fprintf(stderr, "Error: Expected 'done' in while clause\n");
-        state->expecting |= EXPECTING_DONE;
-        free_ast(node);
-        return NULL;
-    }
-    (state->pos)++;
-    state->expecting &= ~EXPECTING_DONE;
-
+    node->data.while_clause.condition = condition;
+    node->data.while_clause.body = body;
     return node;
 }
 
 static ASTNode *parse_until_clause(ParserState *state) {
-    if (state->pos >= state->token_count || state->tokens[state->pos].type != UNTIL) return NULL;
-    (state->pos)++;
+    if (state->pos >= state->token_count || state->tokens[state->pos].type != UNTIL) {
+        return NULL;
+    }
+    state->pos++; // Consume UNTIL
+
+    ASTNode *condition = parse_compound_list(state);
+    if (!condition) {
+        // Allow empty condition (e.g., until; do ...)
+        condition = malloc(sizeof(ASTNode));
+        condition->type = AST_LIST;
+        condition->data.list.and_or = NULL;
+        condition->data.list.separator = SEMI;
+        condition->data.list.next = NULL;
+    }
+
+    if (state->pos >= state->token_count || state->tokens[state->pos].type != DO) {
+        fprintf(stderr, "Error: Expected 'do' after until condition\n");
+        free_ast(condition);
+        return NULL;
+    }
+    state->pos++; // Consume DO
+
+    ASTNode *body = parse_compound_list(state);
+    if (!body) {
+        // Allow empty body (e.g., do; done)
+        body = malloc(sizeof(ASTNode));
+        body->type = AST_LIST;
+        body->data.list.and_or = NULL;
+        body->data.list.separator = SEMI;
+        body->data.list.next = NULL;
+    }
+
+    if (state->pos >= state->token_count || state->tokens[state->pos].type != DONE) {
+        fprintf(stderr, "Error: Expected 'done' to close 'until'\n");
+        free_ast(condition);
+        free_ast(body);
+        return NULL;
+    }
+    state->pos++; // Consume DONE
 
     ASTNode *node = malloc(sizeof(ASTNode));
     node->type = AST_UNTIL_CLAUSE;
-    node->data.until_clause.condition = parse_compound_list(state);
-
-    if (state->pos >= state->token_count) {
-        state->expecting |= EXPECTING_DONE;
-        return node;
-    }
-    if (state->tokens[state->pos].type != DO) {
-        fprintf(stderr, "Error: Expected 'do' in until clause\n");
-        state->expecting |= EXPECTING_DONE;
-        free_ast(node);
-        return NULL;
-    }
-    (state->pos)++;
-
-    node->data.until_clause.body = parse_compound_list(state);
-
-    if (state->pos >= state->token_count) {
-        state->expecting |= EXPECTING_DONE;
-        return node;
-    }
-    if (state->tokens[state->pos].type != DONE) {
-        fprintf(stderr, "Error: Expected 'done' in until clause\n");
-        state->expecting |= EXPECTING_DONE;
-        free_ast(node);
-        return NULL;
-    }
-    (state->pos)++;
-    state->expecting &= ~EXPECTING_DONE;
-
+    node->data.until_clause.condition = condition;
+    node->data.until_clause.body = body;
     return node;
 }
 
@@ -1243,41 +1297,107 @@ static ASTNode *parse_term(ParserState *state) {
 }
 
 static ASTNode *parse_compound_list(ParserState *state) {
-    while (state->pos < state->token_count && state->tokens[state->pos].type == NEWLINE) (state->pos)++;
-    ASTNode *term = parse_term(state);
-    if (!term) return NULL;
-    if (state->pos < state->token_count && (state->tokens[state->pos].type == SEMI || state->tokens[state->pos].type == AMP)) {
-        ASTNode *node = malloc(sizeof(ASTNode));
-        node->type = AST_LIST;
-        node->data.list.and_or = term;
-        node->data.list.separator = state->tokens[state->pos].type;
-        (state->pos)++;
-        node->data.list.next = NULL;
-        return node;
+    ASTNode *head = NULL, *tail = NULL;
+    int has_content = 0;
+
+    while (state->pos < state->token_count) {
+        // Skip newlines and comments (handled by tokenizer)
+        while (state->pos < state->token_count && state->tokens[state->pos].type == NEWLINE) {
+            state->pos++;
+        }
+
+        // Check for end of compound list (e.g., fi, done, esac)
+        if (state->pos >= state->token_count ||
+            state->tokens[state->pos].type == FI ||
+            state->tokens[state->pos].type == DONE ||
+            state->tokens[state->pos].type == ESAC ||
+            state->tokens[state->pos].type == RBRACE) {
+            break;
+        }
+
+        // Parse and_or (includes pipelines, commands)
+        ASTNode *and_or = parse_and_or(state);
+        if (!and_or && state->pos < state->token_count &&
+            (state->tokens[state->pos].type == SEMI || state->tokens[state->pos].type == AMP)) {
+            // Empty command before separator (e.g., ;; or &)
+            and_or = NULL;
+        } else if (!and_or) {
+            // Parse error or end of input
+            break;
+        }
+
+        has_content = 1;
+        ASTNode *list_node = malloc(sizeof(ASTNode));
+        list_node->type = AST_LIST;
+        list_node->data.list.and_or = and_or;
+        list_node->data.list.separator = SEMI; // Default
+        list_node->data.list.next = NULL;
+
+        // Handle separators
+        while (state->pos < state->token_count &&
+               (state->tokens[state->pos].type == SEMI || state->tokens[state->pos].type == AMP ||
+                state->tokens[state->pos].type == NEWLINE)) {
+            if (state->tokens[state->pos].type == AMP) {
+                list_node->data.list.separator = AMP;
+            }
+            state->pos++;
+        }
+
+        if (!head) {
+            head = tail = list_node;
+        } else {
+            tail->data.list.next = list_node;
+            tail = list_node;
+        }
     }
-    return term;
+
+    // If no content (e.g., empty do; done), return null or empty list
+    if (!has_content) {
+        ASTNode *empty_list = malloc(sizeof(ASTNode));
+        empty_list->type = AST_LIST;
+        empty_list->data.list.and_or = NULL;
+        empty_list->data.list.separator = SEMI;
+        empty_list->data.list.next = NULL;
+        return empty_list;
+    }
+
+    return head;
 }
 
 static ASTNode *parse_list(ParserState *state) {
-    ASTNode *and_or = parse_and_or(state);
-    if (!and_or) return NULL;
-    if (state->pos >= state->token_count || (state->tokens[state->pos].type != SEMI && state->tokens[state->pos].type != AMP)) {
-        ASTNode *node = malloc(sizeof(ASTNode));
-        node->type = AST_LIST;
-        node->data.list.and_or = and_or;
-        node->data.list.separator = TOKEN;
-        node->data.list.next = NULL;
-        return node;
+    ASTNode *head = NULL, *tail = NULL;
+
+    while (state->pos < state->token_count) {
+        ASTNode *term = parse_term(state);
+        if (!term && state->pos < state->token_count &&
+            (state->tokens[state->pos].type == SEMI || state->tokens[state->pos].type == AMP)) {
+            // Empty term (e.g., ;; or &)
+            term = malloc(sizeof(ASTNode));
+            term->type = AST_LIST;
+            term->data.list.and_or = NULL;
+            term->data.list.separator = state->tokens[state->pos].type;
+            term->data.list.next = NULL;
+        }
+        if (!term) {
+            break;
+        }
+
+        if (!head) {
+            head = tail = term;
+        } else {
+            tail->data.list.next = term;
+            tail = term;
+        }
+
+        // Consume multiple separators
+        while (state->pos < state->token_count &&
+               (state->tokens[state->pos].type == SEMI || state->tokens[state->pos].type == AMP)) {
+            tail->data.list.separator = state->tokens[state->pos].type;
+            state->pos++;
+        }
     }
 
-    ASTNode *node = malloc(sizeof(ASTNode));
-    node->type = AST_LIST;
-    node->data.list.and_or = and_or;
-    node->data.list.separator = state->tokens[state->pos].type;
-    (state->pos)++;
-    node->data.list.next = parse_list(state);
-
-    return node;
+    return head;
 }
 
 static ASTNode *parse_complete_command(ParserState *state) {
@@ -2294,9 +2414,14 @@ void print_ast(ASTNode *node, int depth) {
             printf("AST_LIST (separator: %s)\n",
                    node->data.list.separator == SEMI ? ";" :
                    node->data.list.separator == AMP ? "&" : "none");
-            for (int i = 0; i < depth + 1; i++) printf("  ");
-            printf("and_or:\n");
-            print_ast(node->data.list.and_or, depth + 2);
+            if (node->data.list.and_or) {
+                for (int i = 0; i < depth + 1; i++) printf("  ");
+                printf("and_or:\n");
+                print_ast(node->data.list.and_or, depth + 2);
+            } else {
+                for (int i = 0; i < depth + 1; i++) printf("  ");
+                printf("and_or: empty\n");
+            }
             if (node->data.list.next) {
                 for (int i = 0; i < depth + 1; i++) printf("  ");
                 printf("next:\n");
