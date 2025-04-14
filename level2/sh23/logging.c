@@ -1,26 +1,41 @@
-
 #include <stdarg.h>
+#include <strings.h> // For strcasecmp
 #include "logging.h"
 
 // Define the global threshold
 LogLevel g_log_threshold = LOG_ERROR;  // Default to ERROR level
 
+// Define the abort level
+static LogLevel g_log_abort_level = LOG_NONE; // Default to no aborting
+
 // Internal logging function
-static void log_message(LogLevel level, const char* level_str, const char* format, va_list args) {
+static void log_message(LogLevel level, czstring level_str, czstring format, va_list args) {
     if (level < g_log_threshold) {
         return;
     }
 
-    char buffer[1024];
-    vsnprintf(buffer, sizeof(buffer), format, args);
+    zstring buffer = malloc(1024); // Mutable buffer for vsnprintf
+    if (buffer == NULL) {
+        fprintf(stderr, "[%s] Failed to allocate log buffer\n", level_str);
+        return;
+    }
+
+    vsnprintf(buffer, 1024, format, args);
     
     fprintf(stderr, "[%s] %s\n", level_str, buffer);
     fflush(stderr);
+    free(buffer);
+
+    // Check if this level should trigger abort
+    if (level >= g_log_abort_level && level != LOG_NONE) {
+        abort();
+    }
 }
 
-// Initialization function checking environment variable
+// Initialization function checking environment variables
 void logging_init(void) {
-    const char* env_level = getenv("LOG_LEVEL");
+    // Set logging threshold
+    czstring env_level = getenv("LOG_LEVEL");
     
     if (env_level != NULL) {
         if (strcasecmp(env_level, "DEBUG") == 0) {
@@ -29,35 +44,59 @@ void logging_init(void) {
             g_log_threshold = LOG_WARN;
         } else if (strcasecmp(env_level, "ERROR") == 0) {
             g_log_threshold = LOG_ERROR;
+        } else if (strcasecmp(env_level, "FATAL") == 0) {
+            g_log_threshold = LOG_FATAL;
         } else if (strcasecmp(env_level, "NONE") == 0) {
             g_log_threshold = LOG_NONE;
+        }
+    }
+
+    // Set abort level
+    czstring env_abort_level = getenv("LOG_ABORT_LEVEL");
+    
+    if (env_abort_level != NULL) {
+        if (strcasecmp(env_abort_level, "WARN") == 0) {
+            g_log_abort_level = LOG_WARN;
+        } else if (strcasecmp(env_abort_level, "ERROR") == 0) {
+            g_log_abort_level = LOG_ERROR;
+        } else if (strcasecmp(env_abort_level, "FATAL") == 0) {
+            g_log_abort_level = LOG_FATAL;
+        } else if (strcasecmp(env_abort_level, "NONE") == 0) {
+            g_log_abort_level = LOG_NONE;
         }
     }
 }
 
 // Public logging functions
-void log_debug(const char* format, ...) {
+void log_debug(czstring format, ...) {
     va_list args;
     va_start(args, format);
     log_message(LOG_DEBUG, "DEBUG", format, args);
     va_end(args);
 }
 
-void log_warn(const char* format, ...) {
+void log_warn(czstring format, ...) {
     va_list args;
     va_start(args, format);
     log_message(LOG_WARN, "WARN", format, args);
     va_end(args);
 }
 
-void log_error(const char* format, ...) {
+void log_error(czstring format, ...) {
     va_list args;
     va_start(args, format);
     log_message(LOG_ERROR, "ERROR", format, args);
     va_end(args);
 }
 
-// Updated example usage with different types
+void log_fatal(czstring format, ...) {
+    va_list args;
+    va_start(args, format);
+    log_message(LOG_FATAL, "FATAL", format, args);
+    va_end(args);
+    abort(); // Ensure abort even if LOG_ABORT_LEVEL is not set
+}
+
 #ifdef EXAMPLE_USAGE
 int test_function(float fvalue, double dvalue, int ivalue) {
     char c1 = 'a', c2 = 'a';
@@ -71,6 +110,11 @@ int test_function(float fvalue, double dvalue, int ivalue) {
     return_if_ge(l1, l2);         // long comparison
     return_val_if_eq(ivalue, 5, 99); // int comparison
     
+    // Example usage of Expects
+    Expects_not_null(&ivalue);
+    Expects(ivalue > 0);
+    Expects_eq(ivalue, 5);
+
     return 0;
 }
 

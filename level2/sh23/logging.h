@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "zstring.h" // Include zstring definitions
 
 /**
  * @file logging.h
@@ -21,7 +22,8 @@ typedef enum {
     LOG_DEBUG = 0, /**< Debug level - detailed diagnostic information */
     LOG_WARN  = 1, /**< Warning level - potential issues */
     LOG_ERROR = 2, /**< Error level - error conditions */
-    LOG_NONE  = 3  /**< No logging - disable all output */
+    LOG_FATAL = 3, /**< Fatal level - unrecoverable errors, aborts program */
+    LOG_NONE  = 4  /**< No logging - disable all output */
 } LogLevel;
 
 /**
@@ -37,7 +39,8 @@ extern LogLevel g_log_threshold;
  * @brief Initialize the logging system
  *
  * Reads the LOG_LEVEL environment variable to set the logging threshold.
- * Valid values are "DEBUG", "WARN", "ERROR", or "NONE".
+ * Valid values are "DEBUG", "WARN", "ERROR", "FATAL", or "NONE".
+ * Also reads LOG_ABORT_LEVEL to determine if WARN or ERROR should abort.
  * Should be called once at program startup.
  */
 void logging_init(void);
@@ -47,29 +50,31 @@ void logging_init(void);
  * @param format Format string (printf-style)
  * @param ... Variable arguments for the format string
  */
-void log_debug(const char* format, ...);
+void log_debug(czstring format, ...);
 
 /**
  * @brief Log a warning message
  * @param format Format string (printf-style)
  * @param ... Variable arguments for the format string
  */
-void log_warn(const char* format, ...);
+void log_warn(czstring format, ...);
 
 /**
  * @brief Log an error message
  * @param format Format string (printf-style)
  * @param ... Variable arguments for the format string
  */
-void log_error(const char* format, ...);
-
-// Basic precondition helpers
+void log_error(czstring format, ...);
 
 /**
- * @brief Return from function if pointer is NULL
- * @param ptr Pointer to check
- * @note Logs an error with function name, line number, and pointer name if NULL
+ * @brief Log a fatal message and abort
+ * @param format Format string (printf-style)
+ * @param ... Variable arguments for the format string
  */
+void log_fatal(czstring format, ...);
+
+// Existing recoverable precondition helpers
+
 #define return_if_null(ptr) do { \
     if ((ptr) == NULL) { \
         log_error("Precondition failed at %s:%d - %s is NULL", __func__, __LINE__, #ptr); \
@@ -77,12 +82,6 @@ void log_error(const char* format, ...);
     } \
 } while(0)
 
-/**
- * @brief Return specified value if pointer is NULL
- * @param ptr Pointer to check
- * @param val Value to return if pointer is NULL
- * @note Logs an error with function name, line number, and pointer name if NULL
- */
 #define return_val_if_null(ptr, val) do { \
     if ((ptr) == NULL) { \
         log_error("Precondition failed at %s:%d - %s is NULL", __func__, __LINE__, #ptr); \
@@ -90,11 +89,6 @@ void log_error(const char* format, ...);
     } \
 } while(0)
 
-/**
- * @brief Return from function if condition is true
- * @param condition Boolean expression to evaluate
- * @note Logs an error with function name, line number, and condition text if true
- */
 #define return_if(condition) do { \
     if (condition) { \
         log_error("Precondition failed at %s:%d - %s", __func__, __LINE__, #condition); \
@@ -102,12 +96,6 @@ void log_error(const char* format, ...);
     } \
 } while(0)
 
-/**
- * @brief Return specified value if condition is true
- * @param condition Boolean expression to evaluate
- * @param val Value to return if condition is true
- * @note Logs an error with function name, line number, and condition text if true
- */
 #define return_val_if(condition, val) do { \
     if (condition) { \
         log_error("Precondition failed at %s:%d - %s", __func__, __LINE__, #condition); \
@@ -115,15 +103,6 @@ void log_error(const char* format, ...);
     } \
 } while(0)
 
-// Comparison precondition helpers with type-generic logging
-
-/**
- * @brief Return if two values are equal
- * @param a First value to compare
- * @param b Second value to compare
- * @note Logs an error with function name, line number, expressions, and values if equal
- * @note Supports char, short, int, long, float, and double types
- */
 #define return_if_eq(a, b) do { \
     if ((a) == (b)) { \
         _Generic((a), \
@@ -139,14 +118,6 @@ void log_error(const char* format, ...);
     } \
 } while(0)
 
-/**
- * @brief Return specified value if two values are equal
- * @param a First value to compare
- * @param b Second value to compare
- * @param val Value to return if equal
- * @note Logs an error with function name, line number, expressions, and values if equal
- * @note Supports char, short, int, long, float, and double types
- */
 #define return_val_if_eq(a, b, val) do { \
     if ((a) == (b)) { \
         _Generic((a), \
@@ -162,13 +133,6 @@ void log_error(const char* format, ...);
     } \
 } while(0)
 
-/**
- * @brief Return if first value is less than second
- * @param a First value to compare
- * @param b Second value to compare
- * @note Logs an error with function name, line number, expressions, and values if true
- * @note Supports char, short, int, long, float, and double types
- */
 #define return_if_lt(a, b) do { \
     if ((a) < (b)) { \
         _Generic((a), \
@@ -184,14 +148,6 @@ void log_error(const char* format, ...);
     } \
 } while(0)
 
-/**
- * @brief Return specified value if first value is less than second
- * @param a First value to compare
- * @param b Second value to compare
- * @param val Value to return if less than
- * @note Logs an error with function name, line number, expressions, and values if true
- * @note Supports char, short, int, long, float, and double types
- */
 #define return_val_if_lt(a, b, val) do { \
     if ((a) < (b)) { \
         _Generic((a), \
@@ -207,13 +163,6 @@ void log_error(const char* format, ...);
     } \
 } while(0)
 
-/**
- * @brief Return if first value is greater than second
- * @param a First value to compare
- * @param b Second value to compare
- * @note Logs an error with function name, line number, expressions, and values if true
- * @note Supports char, short, int, long, float, and double types
- */
 #define return_if_gt(a, b) do { \
     if ((a) > (b)) { \
         _Generic((a), \
@@ -229,14 +178,6 @@ void log_error(const char* format, ...);
     } \
 } while(0)
 
-/**
- * @brief Return specified value if first value is greater than second
- * @param a First value to compare
- * @param b Second value to compare
- * @param val Value to return if greater than
- * @note Logs an error with function name, line number, expressions, and values if true
- * @note Supports char, short, int, long, float, and double types
- */
 #define return_val_if_gt(a, b, val) do { \
     if ((a) > (b)) { \
         _Generic((a), \
@@ -252,13 +193,6 @@ void log_error(const char* format, ...);
     } \
 } while(0)
 
-/**
- * @brief Return if first value is less than or equal to second
- * @param a First value to compare
- * @param b Second value to compare
- * @note Logs an error with function name, line number, expressions, and values if true
- * @note Supports char, short, int, long, float, and double types
- */
 #define return_if_le(a, b) do { \
     if ((a) <= (b)) { \
         _Generic((a), \
@@ -274,14 +208,6 @@ void log_error(const char* format, ...);
     } \
 } while(0)
 
-/**
- * @brief Return specified value if first value is less than or equal to second
- * @param a First value to compare
- * @param b Second value to compare
- * @param val Value to return if less than or equal
- * @note Logs an error with function name, line number, expressions, and values if true
- * @note Supports char, short, int, long, float, and double types
- */
 #define return_val_if_le(a, b, val) do { \
     if ((a) <= (b)) { \
         _Generic((a), \
@@ -297,13 +223,6 @@ void log_error(const char* format, ...);
     } \
 } while(0)
 
-/**
- * @brief Return if first value is greater than or equal to second
- * @param a First value to compare
- * @param b Second value to compare
- * @note Logs an error with function name, line number, expressions, and values if true
- * @note Supports char, short, int, long, float, and double types
- */
 #define return_if_ge(a, b) do { \
     if ((a) >= (b)) { \
         _Generic((a), \
@@ -319,14 +238,6 @@ void log_error(const char* format, ...);
     } \
 } while(0)
 
-/**
- * @brief Return specified value if first value is greater than or equal to second
- * @param a First value to compare
- * @param b Second value to compare
- * @param val Value to return if greater than or equal
- * @note Logs an error with function name, line number, expressions, and values if true
- * @note Supports char, short, int, long, float, and double types
- */
 #define return_val_if_ge(a, b, val) do { \
     if ((a) >= (b)) { \
         _Generic((a), \
@@ -339,6 +250,104 @@ void log_error(const char* format, ...);
             default: log_error("Precondition failed at %s:%d - %s >= %s (unknown type)", __func__, __LINE__, #a, #b) \
         ); \
         return (val); \
+    } \
+} while(0)
+
+// Non-recoverable precondition macros using log_fatal
+
+#define Expects_not_null(ptr) do { \
+    if ((ptr) == NULL) { \
+        log_fatal("Contract violation at %s:%d - %s is NULL", __func__, __LINE__, #ptr); \
+    } \
+} while(0)
+
+#define Expects(condition) do { \
+    if (!(condition)) { \
+        log_fatal("Contract violation at %s:%d - %s", __func__, __LINE__, #condition); \
+    } \
+} while(0)
+
+#define Expects_eq(a, b) do { \
+    if ((a) != (b)) { \
+        _Generic((a), \
+            char: log_fatal("Contract violation at %s:%d - %s != %s (%c != %c)", __func__, __LINE__, #a, #b, (a), (b)), \
+            short: log_fatal("Contract violation at %s:%d - %s != %s (%hd != %hd)", __func__, __LINE__, #a, #b, (a), (b)), \
+            int: log_fatal("Contract violation at %s:%d - %s != %s (%d != %d)", __func__, __LINE__, #a, #b, (a), (b)), \
+            long: log_fatal("Contract violation at %s:%d - %s != %s (%ld != %ld)", __func__, __LINE__, #a, #b, (a), (b)), \
+            float: log_fatal("Contract violation at %s:%d - %s != %s (%f != %f)", __func__, __LINE__, #a, #b, (a), (b)), \
+            double: log_fatal("Contract violation at %s:%d - %s != %s (%lf != %lf)", __func__, __LINE__, #a, #b, (a), (b)), \
+            default: log_fatal("Contract violation at %s:%d - %s != %s (unknown type)", __func__, __LINE__, #a, #b) \
+        ); \
+    } \
+} while(0)
+
+#define Expects_ne(a, b) do { \
+    if ((a) == (b)) { \
+        _Generic((a), \
+            char: log_fatal("Contract violation at %s:%d - %s == %s (%c == %c)", __func__, __LINE__, #a, #b, (a), (b)), \
+            short: log_fatal("Contract violation at %s:%d - %s == %s (%hd == %hd)", __func__, __LINE__, #a, #b, (a), (b)), \
+            int: log_fatal("Contract violation at %s:%d - %s == %s (%d == %d)", __func__, __LINE__, #a, #b, (a), (b)), \
+            long: log_fatal("Contract violation at %s:%d - %s == %s (%ld == %ld)", __func__, __LINE__, #a, #b, (a), (b)), \
+            float: log_fatal("Contract violation at %s:%d - %s == %s (%f == %f)", __func__, __LINE__, #a, #b, (a), (b)), \
+            double: log_fatal("Contract violation at %s:%d - %s == %s (%lf == %lf)", __func__, __LINE__, #a, #b, (a), (b)), \
+            default: log_fatal("Contract violation at %s:%d - %s == %s (unknown type)", __func__, __LINE__, #a, #b) \
+        ); \
+    } \
+} while(0)
+
+#define Expects_lt(a, b) do { \
+    if (!((a) < (b))) { \
+        _Generic((a), \
+            char: log_fatal("Contract violation at %s:%d - %s >= %s (%c >= %c)", __func__, __LINE__, #a, #b, (a), (b)), \
+            short: log_fatal("Contract violation at %s:%d - %s >= %s (%hd >= %hd)", __func__, __LINE__, #a, #b, (a), (b)), \
+            int: log_fatal("Contract violation at %s:%d - %s >= %s (%d >= %d)", __func__, __LINE__, #a, #b, (a), (b)), \
+            long: log_fatal("Contract violation at %s:%d - %s >= %s (%ld >= %ld)", __func__, __LINE__, #a, #b, (a), (b)), \
+            float: log_fatal("Contract violation at %s:%d - %s >= %s (%f >= %f)", __func__, __LINE__, #a, #b, (a), (b)), \
+            double: log_fatal("Contract violation at %s:%d - %s >= %s (%lf >= %lf)", __func__, __LINE__, #a, #b, (a), (b)), \
+            default: log_fatal("Contract violation at %s:%d - %s >= %s (unknown type)", __func__, __LINE__, #a, #b) \
+        ); \
+    } \
+} while(0)
+
+#define Expects_gt(a, b) do { \
+    if (!((a) > (b))) { \
+        _Generic((a), \
+            char: log_fatal("Contract violation at %s:%d - %s <= %s (%c <= %c)", __func__, __LINE__, #a, #b, (a), (b)), \
+            short: log_fatal("Contract violation at %s:%d - %s <= %s (%hd <= %hd)", __func__, __LINE__, #a, #b, (a), (b)), \
+            int: log_fatal("Contract violation at %s:%d - %s <= %s (%d <= %d)", __func__, __LINE__, #a, #b, (a), (b)), \
+            long: log_fatal("Contract violation at %s:%d - %s <= %s (%ld <= %ld)", __func__, __LINE__, #a, #b, (a), (b)), \
+            float: log_fatal("Contract violation at %s:%d - %s <= %s (%f <= %f)", __func__, __LINE__, #a, #b, (a), (b)), \
+            double: log_fatal("Contract violation at %s:%d - %s <= %s (%lf <= %lf)", __func__, __LINE__, #a, #b, (a), (b)), \
+            default: log_fatal("Contract violation at %s:%d - %s <= %s (unknown type)", __func__, __LINE__, #a, #b) \
+        ); \
+    } \
+} while(0)
+
+#define Expects_le(a, b) do { \
+    if (!((a) <= (b))) { \
+        _Generic((a), \
+            char: log_fatal("Contract violation at %s:%d - %s > %s (%c > %c)", __func__, __LINE__, #a, #b, (a), (b)), \
+            short: log_fatal("Contract violation at %s:%d - %s > %s (%hd > %hd)", __func__, __LINE__, #a, #b, (a), (b)), \
+            int: log_fatal("Contract violation at %s:%d - %s > %s (%d > %d)", __func__, __LINE__, #a, #b, (a), (b)), \
+            long: log_fatal("Contract violation at %s:%d - %s > %s (%ld > %ld)", __func__, __LINE__, #a, #b, (a), (b)), \
+            float: log_fatal("Contract violation at %s:%d - %s > %s (%f > %f)", __func__, __LINE__, #a, #b, (a), (b)), \
+            double: log_fatal("Contract violation at %s:%d - %s > %s (%lf > %lf)", __func__, __LINE__, #a, #b, (a), (b)), \
+            default: log_fatal("Contract violation at %s:%d - %s > %s (unknown type)", __func__, __LINE__, #a, #b) \
+        ); \
+    } \
+} while(0)
+
+#define Expects_ge(a, b) do { \
+    if (!((a) >= (b))) { \
+        _Generic((a), \
+            char: log_fatal("Contract violation at %s:%d - %s < %s (%c < %c)", __func__, __LINE__, #a, #b, (a), (b)), \
+            short: log_fatal("Contract violation at %s:%d - %s < %s (%hd < %hd)", __func__, __LINE__, #a, #b, (a), (b)), \
+            int: log_fatal("Contract violation at %s:%d - %s < %s (%d < %d)", __func__, __LINE__, #a, #b, (a), (b)), \
+            long: log_fatal("Contract violation at %s:%d - %s < %s (%ld < %ld)", __func__, __LINE__, #a, #b, (a), (b)), \
+            float: log_fatal("Contract violation at %s:%d - %s < %s (%f < %f)", __func__, __LINE__, #a, #b, (a), (b)), \
+            double: log_fatal("Contract violation at %s:%d - %s < %s (%lf < %lf)", __func__, __LINE__, #a, #b, (a), (b)), \
+            default: log_fatal("Contract violation at %s:%d - %s < %s (unknown type)", __func__, __LINE__, #a, #b) \
+        ); \
     } \
 } while(0)
 
