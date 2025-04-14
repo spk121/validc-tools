@@ -81,7 +81,20 @@ static int is_valid_name(const char *str) {
     return 1;
 }
 
-static const char *parse_expansion(const char *input, char *token, int *pos, int max_len, int in_double_quote) {
+
+// Helper to append to a dynamic string
+static void append_to_string(char **str, int *capacity, int *len, char c) {
+    if (*len >= *capacity - 1) {
+        *capacity *= 2;
+        *str = realloc(*str, *capacity);
+    }
+    (*str)[(*len)++] = c;
+    (*str)[*len] = '\0';
+}
+
+static const char *parse_expansion(const char *input, char *token, int *pos, int max_len, int in_double_quote,
+    int depth,
+    char **active_aliases, int active_alias_count) {
     const char *p = input;
     if (*p == '$') {
         token[(*pos)++] = *p++;
@@ -108,7 +121,7 @@ static const char *parse_expansion(const char *input, char *token, int *pos, int
                     token[(*pos)++] = *p++;
                     token[(*pos)++] = *p++;
                 } else if (*p == '$' || *p == '`') {
-                    p = parse_expansion(p, token, pos, max_len, in_double_quote);
+                    p = parse_expansion(p, token, pos, max_len, in_double_quote, depth, active_aliases, active_alias_count);
                 } else {
                     token[(*pos)++] = *p++;
                 }
@@ -123,7 +136,7 @@ static const char *parse_expansion(const char *input, char *token, int *pos, int
                 token[(*pos)++] = *p++;
                 token[(*pos)++] = *p++;
             } else if (*p == '$' || *p == '`') {
-                p = parse_expansion(p, token, pos, max_len, in_double_quote);
+                p = parse_expansion(p, token, pos, max_len, in_double_quote, depth, active_aliases, active_alias_count);
             } else {
                 token[(*pos)++] = *p++;
             }
@@ -133,17 +146,145 @@ static const char *parse_expansion(const char *input, char *token, int *pos, int
     return p;
 }
 
-void tokenize(const char *input, Token *tokens, int *token_count) {
+void tokenize(const char *input, Token *tokens, int *token_count, int depth,
+              char **active_aliases, int active_alias_count) {
     *token_count = 0;
     const char *p = input;
     char current_token[MAX_TOKEN_LEN];
     int pos = 0;
+    int in_quoted = 0; // Track if we're in a quoted heredoc delimiter
     int in_word = 0;
 
+    // Helper macro to check MAX_TOKEN_LEN
+    #define CHECK_TOKEN_LEN() do { \
+        if (pos >= MAX_TOKEN_LEN - 1) { \
+            fprintf(stderr, "Error: Token length exceeds %d characters\n", MAX_TOKEN_LEN - 1); \
+            return; \
+        } \
+    } while (0)
+
+    // Helper macro to check MAX_TOKENS
+    #define CHECK_TOKEN_COUNT() do { \
+        if (*token_count >= MAX_TOKENS) { \
+            fprintf(stderr, "Error: Token count exceeds %d\n", MAX_TOKENS); \
+            return; \
+        } \
+    } while (0)
+
     while (*p) {
+        // Handle heredoc after << or <<-
+        if (pos >= 2 && strncmp(current_token + pos - 2, "<<", 2) == 0 &&
+            (current_token[pos - 2] == '<' || current_token[pos - 2] == '-')) {
+            int is_dash = (current_token[pos - 2] == '-' && current_token[pos - 3] == '<');
+            if (is_dash) {
+                current_token[pos - 2] = '\0';
+                pos -= 2;
+            } else {
+                current_token[pos - 2] = '\0';
+                pos -= 2;
+            }
+            CHECK_TOKEN_COUNT();
+            strncpy(tokens[*token_count].text, is_dash ? "<<-" : "<<", MAX_TOKEN_LEN);
+            tokens[*token_count].type = is_dash ? DLESSDASH : DLESS;
+            (*token_count)++;
+            pos = 0;
+
+            // Parse delimiter
+            char delimiter[MAX_TOKEN_LEN] = {0};
+            int delim_pos = 0;
+            int delim_quoted = 0;
+            if (*p == '\'' || *p == '"') {
+                char quote = *p++;
+                delim_quoted = 1;
+                while (*p && *p != quote) {
+                    if (delim_pos < MAX_TOKEN_LEN - 1) {
+                        delimiter[delim_pos++] = *p++;
+                    } else {
+                        fprintf(stderr, "Error: Delimiter exceeds %d characters\n", MAX_TOKEN_LEN - 1);
+                        return;
+                    }
+                }
+                if (*p == quote) p++;
+                else {
+                    fprintf(stderr, "Error: Unmatched quote in heredoc delimiter\n");
+                    return;
+                }
+            } else {
+                while (*p && !isspace(*p) && *p != '\n' && !is_operator_start(*p)) {
+                    if (delim_pos < MAX_TOKEN_LEN - 1) {
+                        delimiter[delim_pos++] = *p++;
+                    } else {
+                        fprintf(stderr, "Error: Delimiter exceeds %d characters\n", MAX_TOKEN_LEN - 1);
+                        return;
+                    }
+                }
+            }
+            delimiter[delim_pos] = '\0';
+
+            // Skip whitespace after delimiter
+            while (*p && isspace(*p) && *p != '\n') p++;
+            if (*p == '\n') p++;
+
+            // Collect heredoc content until delimiter
+            char *content = malloc(512);
+            int content_capacity = 512;
+            int content_len = 0;
+            content[0] = '\0';
+            char line[MAX_TOKEN_LEN];
+            int line_pos = 0;
+            int found_delimiter = 0;
+
+            while (*p && !found_delimiter) {
+                if (*p == '\n' || !*p) {
+                    line[line_pos] = '\0';
+                    // Check if line matches delimiter
+                    char *trimmed_line = line;
+                    if (is_dash) {
+                        while (*trimmed_line == '\t') trimmed_line++;
+                    }
+                    if (strcmp(trimmed_line, delimiter) == 0) {
+                        found_delimiter = 1;
+                        p++;
+                        break;
+                    }
+                    // Append line to content
+                    for (int i = 0; line[i]; i++) {
+                        append_to_string(&content, &content_capacity, &content_len, line[i]);
+                    }
+                    append_to_string(&content, &content_capacity, &content_len, '\n');
+                    line_pos = 0;
+                    if (*p == '\n') p++;
+                } else {
+                    if (line_pos < MAX_TOKEN_LEN - 1) {
+                        line[line_pos++] = *p++;
+                    } else {
+                        fprintf(stderr, "Error: Heredoc line exceeds %d characters\n", MAX_TOKEN_LEN - 1);
+                        free(content);
+                        return;
+                    }
+                }
+            }
+
+            if (!found_delimiter) {
+                fprintf(stderr, "Error: Heredoc delimiter '%s' not found\n", delimiter);
+                free(content);
+                return;
+            }
+
+            // Store delimiter and content as a single token (for simplicity)
+            CHECK_TOKEN_COUNT();
+            snprintf(tokens[*token_count].text, MAX_TOKEN_LEN, "%s\n%s", delimiter, content);
+            tokens[*token_count].type = WORD; // Temporary, parser will handle
+            (*token_count)++;
+            free(content);
+            continue;
+        }
+
+        // Existing tokenization logic (simplified for brevity)
         if (*p == '\0') {
             if (in_word) {
                 current_token[pos] = '\0';
+                CHECK_TOKEN_COUNT();
                 strncpy(tokens[*token_count].text, current_token, MAX_TOKEN_LEN);
                 (*token_count)++;
             }
@@ -158,9 +299,11 @@ void tokenize(const char *input, Token *tokens, int *token_count) {
         if (*p == '\n' && !in_word) {
             current_token[pos] = '\0';
             if (pos > 0) {
+                CHECK_TOKEN_COUNT();
                 strncpy(tokens[*token_count].text, current_token, MAX_TOKEN_LEN);
                 (*token_count)++;
             }
+            CHECK_TOKEN_COUNT();
             strncpy(tokens[*token_count].text, "\n", MAX_TOKEN_LEN);
             tokens[*token_count].type = NEWLINE;
             (*token_count)++;
@@ -171,29 +314,26 @@ void tokenize(const char *input, Token *tokens, int *token_count) {
 
         if (*p == '\\' || *p == '\'' || *p == '"') {
             if (!in_word) in_word = 1;
-            if (pos >= MAX_TOKEN_LEN - 1) {
-                current_token[pos] = '\0';
-                strncpy(tokens[*token_count].text, current_token, MAX_TOKEN_LEN);
-                (*token_count)++;
-                pos = 0;
-            }
-
             if (*p == '\\') {
+                CHECK_TOKEN_LEN();
                 current_token[pos++] = *p++;
                 if (*p && *p != '\n') {
+                    CHECK_TOKEN_LEN();
                     current_token[pos++] = *p++;
                 } else if (*p == '\n') {
                     p++;
                 }
                 continue;
             }
-
             if (*p == '\'') {
+                CHECK_TOKEN_LEN();
                 current_token[pos++] = *p++;
                 while (*p && *p != '\'') {
+                    CHECK_TOKEN_LEN();
                     current_token[pos++] = *p++;
                 }
                 if (*p == '\'') {
+                    CHECK_TOKEN_LEN();
                     current_token[pos++] = *p++;
                 } else {
                     fprintf(stderr, "Error: Unmatched single quote\n");
@@ -201,26 +341,31 @@ void tokenize(const char *input, Token *tokens, int *token_count) {
                 }
                 continue;
             }
-
             if (*p == '"') {
+                CHECK_TOKEN_LEN();
                 current_token[pos++] = *p++;
                 while (*p && *p != '"') {
                     if (*p == '\\') {
+                        CHECK_TOKEN_LEN();
                         current_token[pos++] = *p++;
                         if (*p && strchr("$`\"\\", *p)) {
+                            CHECK_TOKEN_LEN();
                             current_token[pos++] = *p++;
                         } else if (*p == '\n') {
                             p++;
                         } else if (*p) {
+                            CHECK_TOKEN_LEN();
                             current_token[pos++] = *p++;
                         }
                     } else if (*p == '$' || *p == '`') {
-                        p = parse_expansion(p, current_token, &pos, MAX_TOKEN_LEN, 1);
+                        p = parse_expansion(p, current_token, &pos, MAX_TOKEN_LEN, 1, depth, active_aliases, active_alias_count);
                     } else {
+                        CHECK_TOKEN_LEN();
                         current_token[pos++] = *p++;
                     }
                 }
                 if (*p == '"') {
+                    CHECK_TOKEN_LEN();
                     current_token[pos++] = *p++;
                 } else {
                     fprintf(stderr, "Error: Unmatched double quote\n");
@@ -232,13 +377,14 @@ void tokenize(const char *input, Token *tokens, int *token_count) {
 
         if ((*p == '$' || *p == '`') && !in_word) {
             if (!in_word) in_word = 1;
-            p = parse_expansion(p, current_token, &pos, MAX_TOKEN_LEN, 0);
+            p = parse_expansion(p, current_token, &pos, MAX_TOKEN_LEN, 0, depth, active_aliases, active_alias_count);
             continue;
         }
 
         if (isspace(*p) && *p != '\n') {
             if (in_word) {
                 current_token[pos] = '\0';
+                CHECK_TOKEN_COUNT();
                 strncpy(tokens[*token_count].text, current_token, MAX_TOKEN_LEN);
                 (*token_count)++;
                 pos = 0;
@@ -251,17 +397,21 @@ void tokenize(const char *input, Token *tokens, int *token_count) {
         if (is_operator_start(*p)) {
             if (in_word) {
                 current_token[pos] = '\0';
+                CHECK_TOKEN_COUNT();
                 strncpy(tokens[*token_count].text, current_token, MAX_TOKEN_LEN);
                 (*token_count)++;
                 pos = 0;
                 in_word = 0;
             }
+            CHECK_TOKEN_LEN();
             current_token[pos++] = *p++;
-            if (*p && is_operator_start(*p)) {
+            if (*p && (is_operator_start(*p) || *p == '-')) {
+                CHECK_TOKEN_LEN();
                 current_token[pos++] = *p++;
             }
             current_token[pos] = '\0';
             if (is_operator(current_token)) {
+                CHECK_TOKEN_COUNT();
                 strncpy(tokens[*token_count].text, current_token, MAX_TOKEN_LEN);
                 (*token_count)++;
                 pos = 0;
@@ -272,35 +422,18 @@ void tokenize(const char *input, Token *tokens, int *token_count) {
         }
 
         if (!in_word) in_word = 1;
-        if (pos < MAX_TOKEN_LEN - 1) {
-            current_token[pos++] = *p++;
-        } else {
-            current_token[pos] = '\0';
-            strncpy(tokens[*token_count].text, current_token, MAX_TOKEN_LEN);
-            (*token_count)++;
-            pos = 0;
-            in_word = 0;
-        }
+        CHECK_TOKEN_LEN();
+        current_token[pos++] = *p++;
     }
 
     if (in_word) {
         current_token[pos] = '\0';
+        CHECK_TOKEN_COUNT();
         strncpy(tokens[*token_count].text, current_token, MAX_TOKEN_LEN);
         (*token_count)++;
     }
 
-    if (*token_count > 0) {
-        char alias_value[MAX_TOKEN_LEN];
-        if (substitute_alias(tokens[0].text, alias_value, MAX_TOKEN_LEN)) {
-            strncpy(tokens[0].text, alias_value, MAX_TOKEN_LEN);
-            if (strlen(alias_value) > 0 && isspace(alias_value[strlen(alias_value) - 1]) && *token_count > 1) {
-                if (substitute_alias(tokens[1].text, alias_value, MAX_TOKEN_LEN)) {
-                    strncpy(tokens[1].text, alias_value, MAX_TOKEN_LEN);
-                }
-            }
-        }
-    }
-
+    // Existing post-processing (operators, IO_NUMBER, reserved words, aliases)
     for (int i = 0; i < *token_count; i++) {
         if (is_operator(tokens[i].text)) {
             tokens[i].type = get_operator_type(tokens[i].text);
@@ -340,6 +473,78 @@ void tokenize(const char *input, Token *tokens, int *token_count) {
             }
         }
     }
+
+    // Alias substitution (unchanged)
+    for (int i = 0; i < *token_count;) {
+        char alias_value[MAX_TOKEN_LEN];
+        Token temp_tokens[MAX_TOKENS];
+        int temp_token_count = 0;
+        int perform_alias_check = 1;
+
+        if (tokens[i].type != WORD && tokens[i].type != NAME) {
+            i++;
+            continue;
+        }
+
+        if (depth >= MAX_ALIAS_DEPTH) {
+            fprintf(stderr, "Error: Alias recursion limit exceeded\n");
+            i++;
+            continue;
+        }
+
+        for (int j = 0; j < active_alias_count; j++) {
+            if (strcmp(active_aliases[j], tokens[i].text) == 0) {
+                i++;
+                perform_alias_check = 0;
+                break;
+            }
+        }
+        if (!perform_alias_check) {
+            continue;
+        }
+
+        if (substitute_alias(tokens[i].text, alias_value, MAX_TOKEN_LEN)) {
+            if (active_alias_count >= MAX_ALIAS_DEPTH) {
+                fprintf(stderr, "Error: Too many active aliases\n");
+                i++;
+                continue;
+            }
+            active_aliases[active_alias_count] = tokens[i].text;
+            int new_active_alias_count = active_alias_count + 1;
+
+            tokenize(alias_value, temp_tokens, &temp_token_count, depth + 1, active_aliases, new_active_alias_count);
+
+            int shift_amount = temp_token_count - 1;
+            if (shift_amount > 0) {
+                if (*token_count + shift_amount >= MAX_TOKENS) {
+                    fprintf(stderr, "Error: Token count exceeds %d after alias expansion\n", MAX_TOKENS);
+                    return;
+                }
+                for (int j = *token_count - 1; j > i; j--) {
+                    tokens[j + shift_amount] = tokens[j];
+                }
+            }
+
+            for (int j = 0; j < temp_token_count; j++) {
+                tokens[i + j] = temp_tokens[j];
+            }
+            *token_count += shift_amount;
+
+            if (temp_token_count > 0 && isspace(alias_value[strlen(alias_value) - 1])) {
+                i += temp_token_count;
+                perform_alias_check = 1;
+            } else {
+                i += temp_token_count;
+                perform_alias_check = 0;
+            }
+        } else {
+            i++;
+            perform_alias_check = 0;
+        }
+    }
+
+    #undef CHECK_TOKEN_LEN
+    #undef CHECK_TOKEN_COUNT
 }
 
 void init_parser_state(ParserState *state) {
@@ -1061,10 +1266,14 @@ static ASTNode *parse_complete_commands(ParserState *state) {
     return node;
 }
 
+#define MAX_ALIAS_DEPTH 100
+
 ParseStatus parse_line(const char *line, ParserState *state, ASTNode **ast) {
+    char *active_aliases[MAX_ALIAS_DEPTH];
     Token new_tokens[MAX_TOKENS];
     int new_token_count = 0;
-    tokenize(line, new_tokens, &new_token_count);
+
+    tokenize(line, new_tokens, &new_token_count, 0, active_aliases, 0);
 
     if (state->token_count + new_token_count > state->token_capacity) {
         state->token_capacity = (state->token_count + new_token_count) * 2;
@@ -1336,86 +1545,6 @@ char *expand_assignment(const char *assignment, Environment *env, FunctionTable 
     return result;
 }
 
-void set_variable(Environment *env, const char *assignment) {
-    char *expanded = expand_assignment(assignment, env, NULL, NULL);
-    char *name = strdup(expanded);
-    char *value = strchr(name, '=');
-    if (value) {
-        *value = '\0';
-        value++;
-    } else {
-        value = "";
-    }
-    for (int i = 0; i < env->var_count; i++) {
-        if (strncmp(env->variables[i].name, name, strlen(name)) == 0 && env->variables[i].name[strlen(name)] == '=') {
-            free(env->variables[i].name);
-            env->variables[i].name = strdup(expanded);
-            free(name);
-            free(expanded);
-            return;
-        }
-    }
-    if (env->var_count >= env->var_capacity) {
-        env->var_capacity *= 2;
-        env->variables = realloc(env->variables, env->var_capacity * sizeof(char *));
-    }
-    env->variables[env->var_count].name = strdup(expanded);
-    env->var_count++;
-    free(name);
-    free(expanded);
-}
-
-const char *get_variable(Environment *env, const char *name) {
-    for (int i = 0; i < env->var_count; i++) {
-        if (strncmp(env->variables[i].name, name, strlen(name)) == 0 && env->variables[i].name[strlen(name)] == '=') {
-            return env->variables[i].name + strlen(name) + 1;
-        }
-    }
-    return NULL;
-}
-
-void export_variable(Environment *env, const char *name) {
-    for (int i = 0; i < env->var_count; i++) {
-        if (strcmp(env->variables[i].name, name) == 0) {
-            env->variables[i].exported = 1;
-            return;
-        }
-    }
-    // If not found, add it with an empty value
-    if (env->var_count >= env->var_capacity) {
-        env->var_capacity *= 2;
-        env->variables = realloc(env->variables, env->var_capacity * sizeof(Variable));
-    }
-    env->variables[env->var_count].name = strdup(name);
-    env->variables[env->var_count].value = strdup("");
-    env->variables[env->var_count].exported = 1;
-    env->var_count++;
-}
-
-void unset_variable(Environment *env, const char *name) {
-    for (int i = 0; i < env->var_count; i++) {
-        if (strcmp(env->variables[i].name, name) == 0) {
-            free(env->variables[i].name);
-            free(env->variables[i].value);
-            for (int j = i; j < env->var_count - 1; j++) {
-                env->variables[j] = env->variables[j + 1];
-            }
-            env->var_count--;
-            return;
-        }
-    }
-}
-
-void show_variables(Environment *env) {
-    if (env->var_count == 0) {
-        printf("No variables set.\n");
-        return;
-    }
-    for (int i = 0; i < env->var_count; i++) {
-        printf("%s%s=%s\n", env->variables[i].exported ? "export " : "",
-               env->variables[i].name, env->variables[i].value);
-    }
-}
 
 void init_function_table(FunctionTable *ft) {
     ft->func_capacity = 16;

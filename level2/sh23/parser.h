@@ -2,6 +2,7 @@
 #define PARSER_H
 
 #include <stdbool.h>
+#include "variables.h"
 
 #define MAX_TOKENS 1024
 #define MAX_TOKEN_LEN 1024
@@ -37,8 +38,12 @@ typedef struct CaseItem {
 
 typedef struct Redirect {
     TokenType operator;
-    char *filename;
-    char *io_number;
+    char *filename;          // For <file, >file, etc.
+    char *io_number;        // e.g., "2" in 2>
+    char *delimiter;        // Heredoc delimiter (e.g., "EOF")
+    char *heredoc_content;  // Heredoc content (multi-line string)
+    int is_quoted;          // 1 if delimiter was quoted (disables expansion)
+    int is_dash;            // 1 for <<- (tab stripping)
     struct Redirect *next;
 } Redirect;
 
@@ -148,15 +153,7 @@ typedef struct {
 } ParserState;
 
 typedef struct {
-    char *name;
-    char *value;
-    int exported; // 1 if exported, 0 otherwise
-} Variable;
-
-typedef struct {
-    Variable *variables;
-    int var_count;
-    int var_capacity;
+    VariableStore *var_store;
     char *shell_name; // For $0
     int arg_count;    // For $# (argc - 1)
     char **args;      // For $1-$9 (argv[1] and up)
