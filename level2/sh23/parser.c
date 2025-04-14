@@ -228,7 +228,7 @@ static const char *parse_expansion(const char *p, char *current_token, int *pos,
             }
             return p;
         } else if (*p == '(') {
-            // Command substitution
+            // Command substitution $(...)
             p++;
             int paren_count = 1;
             char cmd[MAX_TOKEN_LEN] = {0};
@@ -251,10 +251,10 @@ static const char *parse_expansion(const char *p, char *current_token, int *pos,
                 if (*pos < max_len - 1) current_token[(*pos)++] = ')';
             } else {
                 fprintf(stderr, "Error: Unmatched ')' in command substitution\n");
+                return p; // Avoid advancing past error
             }
             return p;
         } else if (isalpha(*p) || *p == '_' || strchr("*@#?$!-0", *p)) {
-            // Parameter or special parameter
             char var_name[MAX_TOKEN_LEN] = {0};
             int var_pos = 0;
             var_name[var_pos++] = *p++;
@@ -278,15 +278,31 @@ static const char *parse_expansion(const char *p, char *current_token, int *pos,
             return p;
         }
     } else if (*p == '`') {
+        // Command substitution `...`
         p++;
         char cmd[MAX_TOKEN_LEN] = {0};
         int cmd_pos = 0;
-        while (*p && *p != '`' && cmd_pos < MAX_TOKEN_LEN - 1) {
+        int escaped = 0;
+        while (*p && cmd_pos < MAX_TOKEN_LEN - 1) {
+            if (escaped) {
+                cmd[cmd_pos++] = *p;
+                escaped = 0;
+                p++;
+                continue;
+            }
+            if (*p == '\\') {
+                escaped = 1;
+                p++;
+                continue;
+            }
+            if (*p == '`') {
+                p++;
+                break;
+            }
             cmd[cmd_pos++] = *p++;
         }
         cmd[cmd_pos] = '\0';
-        if (*p == '`') {
-            p++;
+        if (*(p - 1) == '`' || *p == '`') {
             if (*pos < max_len - 1) current_token[(*pos)++] = '`';
             for (int i = 0; cmd[i] && *pos < max_len - 1; i++) {
                 current_token[(*pos)++] = cmd[i];
@@ -294,6 +310,7 @@ static const char *parse_expansion(const char *p, char *current_token, int *pos,
             if (*pos < max_len - 1) current_token[(*pos)++] = '`';
         } else {
             fprintf(stderr, "Error: Unmatched '`' in command substitution\n");
+            return p;
         }
         return p;
     }
@@ -877,21 +894,47 @@ static ASTNode *parse_simple_command(ParserState *state) {
 
         char *text = state->tokens[state->pos].text;
         if (text[0] == '$' || text[0] == '`') {
-            // Parse parameter, command, or arithmetic expansion
             node->data.simple_command.expansions = realloc(node->data.simple_command.expansions,
                                                          (node->data.simple_command.expansion_count + 1) * sizeof(Expansion *));
             Expansion *exp = malloc(sizeof(Expansion));
             if (text[0] == '`') {
+                // Backtick command substitution
                 exp->type = EXPANSION_COMMAND;
-                char *cmd = strdup(text + 1);
-                cmd[strlen(cmd) - 1] = '\0'; // Remove trailing `
-                ParserState sub_state;
-                init_parser_state(&sub_state);
-                ASTNode *sub_ast = NULL;
-                ParseStatus status = parse_line(cmd, &sub_state, &sub_ast);
-                exp->data.command.command = (status == PARSE_COMPLETE) ? sub_ast : NULL;
-                free(cmd);
-                free_parser_state(&sub_state);
+                if (strlen(text) <= 2) {
+                    // Empty ` `
+                    exp->data.command.command = NULL;
+                } else {
+                    char *cmd = strdup(text + 1);
+                    cmd[strlen(cmd) - 1] = '\0'; // Remove trailing `
+                    ParserState sub_state;
+                    init_parser_state(&sub_state);
+                    tokenize(cmd, sub_state.tokens, &sub_state.token_count, depth + 1, NULL, 0);
+                    sub_state.pos = 0;
+                    ASTNode *sub_ast = NULL;
+                    ParseStatus status = parse_line_internal(&sub_state, &sub_ast);
+                    exp->data.command.command = (status == PARSE_COMPLETE && sub_ast) ? sub_ast : NULL;
+                    free(cmd);
+                    free_parser_state(&sub_state);
+                }
+            } else if (strncmp(text, "$(", 2) == 0) {
+                // $(...) command substitution
+                exp->type = EXPANSION_COMMAND;
+                if (strlen(text) <= 3) {
+                    // Empty $()
+                    exp->data.command.command = NULL;
+                } else {
+                    char *cmd = strdup(text + 2);
+                    cmd[strlen(cmd) - 1] = '\0'; // Remove )
+                    ParserState sub_state;
+                    init_parser_state(&sub_state);
+                    tokenize(cmd, sub_state.tokens, &sub_state.token_count, depth + 1, NULL, 0);
+                    sub_state.pos = 0;
+                    ASTNode *sub_ast = NULL;
+                    ParseStatus status = parse_line_internal(&sub_state, &sub_ast);
+                    exp->data.command.command = (status == PARSE_COMPLETE && sub_ast) ? sub_ast : NULL;
+                    free(cmd);
+                    free_parser_state(&sub_state);
+                }
             } else if (strncmp(text, "$((", 3) == 0) {
                 exp->type = EXPANSION_ARITHMETIC;
                 char *expr = strdup(text + 3);
@@ -1494,29 +1537,54 @@ static ASTNode *parse_command(ParserState *state) {
 }
 
 static ASTNode *parse_pipeline(ParserState *state) {
+    int bang = 0;
+    if (state->pos < state->token_count && state->tokens[state->pos].type == BANG) {
+        bang = 1;
+        state->pos++; // Consume BANG
+    }
+
+    ASTNode **commands = NULL;
+    int command_count = 0;
+
+    // Parse first command
+    ASTNode *cmd = parse_command(state);
+    if (!cmd) {
+        if (state->pos < state->token_count && state->tokens[state->pos].type == PIPE) {
+            fprintf(stderr, "Error: Pipeline cannot start with '|'\n");
+            return NULL;
+        }
+        return NULL;
+    }
+    commands = realloc(commands, (command_count + 1) * sizeof(ASTNode *));
+    commands[command_count++] = cmd;
+
+    // Parse additional commands after |
+    while (state->pos < state->token_count && state->tokens[state->pos].type == PIPE) {
+        state->pos++; // Consume PIPE
+        cmd = parse_command(state);
+        if (!cmd) {
+            fprintf(stderr, "Error: Expected command after '|'\n");
+            for (int i = 0; i < command_count; i++) {
+                free_ast(commands[i]);
+            }
+            free(commands);
+            return NULL;
+        }
+        commands = realloc(commands, (command_count + 1) * sizeof(ASTNode *));
+        commands[command_count++] = cmd;
+    }
+
+    if (command_count == 0) {
+        fprintf(stderr, "Error: Empty pipeline\n");
+        free(commands);
+        return NULL;
+    }
+
     ASTNode *node = malloc(sizeof(ASTNode));
     node->type = AST_PIPELINE;
-    node->data.pipeline.commands = NULL;
-    node->data.pipeline.command_count = 0;
-    node->data.pipeline.bang = 0;
-
-    if (state->pos < state->token_count && state->tokens[state->pos].type == BANG) {
-        node->data.pipeline.bang = 1;
-        (state->pos)++;
-    }
-
-    while (state->pos < state->token_count) {
-        ASTNode *cmd = parse_command(state);
-        if (!cmd) break;
-        node->data.pipeline.commands = realloc(node->data.pipeline.commands,
-            (node->data.pipeline.command_count + 1) * sizeof(ASTNode *));
-        node->data.pipeline.commands[node->data.pipeline.command_count] = cmd;
-        node->data.pipeline.command_count++;
-
-        if (state->pos >= state->token_count || state->tokens[state->pos].type != PIPE) break;
-        (state->pos)++;
-    }
-
+    node->data.pipeline.commands = commands;
+    node->data.pipeline.command_count = command_count;
+    node->data.pipeline.bang = bang;
     return node;
 }
 
@@ -1954,6 +2022,18 @@ int has_redirects(Redirect *redirects) {
     return redirects != NULL;
 }
 
+static char *get_command_name(ASTNode *node) {
+    if (!node) return "unknown";
+    if (node->type == AST_SIMPLE_COMMAND && node->data.simple_command.command) {
+        return node->data.simple_command.command;
+    } else if (node->type == AST_PIPELINE && node->data.pipeline.command_count > 0) {
+        return get_command_name(node->data.pipeline.commands[0]);
+    } else if (node->type == AST_AND_OR) {
+        return get_command_name(node->data.and_or.left);
+    }
+    return "unknown";
+}
+
 ExecStatus execute_ast(ASTNode *node, Environment *env, FunctionTable *ft, int *last_exit_status) {
     if (!node) {
         *last_exit_status = 0;
@@ -1980,30 +2060,30 @@ ExecStatus execute_ast(ASTNode *node, Environment *env, FunctionTable *ft, int *
                 }
                 redir = redir->next;
             }
-            // Handle expansions in execution (simplified)            
-			for (int i = 0; i < node->data.simple_command.expansion_count; i++) {
+            for (int i = 0; i < node->data.simple_command.expansion_count; i++) {
                 char *value = expand_parameter(node->data.simple_command.expansions[i], env, ft, last_exit_status);
-                free(value); // For now, just parse, execution will error
+                if (*last_exit_status != 0) {
+                    free(value);
+                    return EXEC_NORMAL; // Stop on expansion error
+                }
+                free(value);
             }
             return execute_simple_command(node, env, ft, last_exit_status);
-        }        
-		
+        }
 		case AST_PIPELINE: {
             // Reject pipelines with multiple commands
             if (node->data.pipeline.command_count > 1) {
-                fprintf(stderr, "Error: Pipelines (|) not supported by sh23\n");
+                char *cmd_name = get_command_name(node->data.pipeline.commands[0]);
+                fprintf(stderr, "Error: Pipeline starting with '%s' not supported by sh23\n", cmd_name);
                 *last_exit_status = 1;
                 return EXEC_NORMAL;
             }
-            ExecStatus status = EXEC_NORMAL;
             int bang = node->data.pipeline.bang;
-            for (int i = 0; i < node->data.pipeline.command_count; i++) {
-                status = execute_ast(node->data.pipeline.commands[i], env, ft, last_exit_status);
-                if (status != EXEC_NORMAL) {
-                    break;
-                }
+            ExecStatus status = EXEC_NORMAL;
+            if (node->data.pipeline.command_count == 1) {
+                status = execute_ast(node->data.pipeline.commands[0], env, ft, last_exit_status);
             }
-            if (bang) {
+            if (bang && status == EXEC_NORMAL) {
                 *last_exit_status = !(*last_exit_status);
             }
             return status;
@@ -2024,9 +2104,23 @@ ExecStatus execute_ast(ASTNode *node, Environment *env, FunctionTable *ft, int *
         case AST_LIST: {
             // Reject background execution
             if (node->data.list.separator == AMP) {
-                fprintf(stderr, "Error: Background execution (&) not supported by sh23\n");
+                char *cmd_name = get_command_name(node->data.list.and_or);
+                fprintf(stderr, "Error: Background execution of '%s' not supported by sh23\n", cmd_name);
                 *last_exit_status = 1;
                 return EXEC_NORMAL;
+            }
+            // Recursively check next for background jobs
+            if (node->data.list.next) {
+                ASTNode *next = node->data.list.next;
+                while (next) {
+                    if (next->type == AST_LIST && next->data.list.separator == AMP) {
+                        char *cmd_name = get_command_name(next->data.list.and_or);
+                        fprintf(stderr, "Error: Background execution of '%s' not supported by sh23\n", cmd_name);
+                        *last_exit_status = 1;
+                        return EXEC_NORMAL;
+                    }
+                    next = next->data.list.next;
+                }
             }
             ExecStatus status = execute_ast(node->data.list.and_or, env, ft, last_exit_status);
             if (status != EXEC_NORMAL) {
@@ -2039,8 +2133,7 @@ ExecStatus execute_ast(ASTNode *node, Environment *env, FunctionTable *ft, int *
         }
 
         case AST_COMPLETE_COMMAND: {
-            ExecStatus status = execute_ast(node->data.complete_command.list, env, ft, last_exit_status);
-            return status;
+            return execute_ast(node->data.complete_command.list, env, ft, last_exit_status);
         }
 
         case AST_PROGRAM: {
@@ -2213,6 +2306,12 @@ ExecStatus execute_ast(ASTNode *node, Environment *env, FunctionTable *ft, int *
             }
             fprintf(stderr, "Error: I/O redirection not supported by sh23\n");
             *last_exit_status = 1;
+            return EXEC_NORMAL;
+        }
+
+        case AST_EXPANSION: {
+            char *value = expand_parameter(&node->data.expansion, env, ft, last_exit_status);
+            free(value);
             return EXEC_NORMAL;
         }
 
@@ -2638,8 +2737,10 @@ void print_ast(ASTNode *node, int depth) {
                             printf("SUFFIX_LONG: %s %%%% %s\n", exp->data.pattern.var, exp->data.pattern.pattern);
                             break;
                         case EXPANSION_COMMAND:
-                            printf("COMMAND:\n");
-                            print_ast(exp->data.command.command, depth + 3);
+                            printf("COMMAND: %s\n", exp->data.command.command ? "" : "empty");
+                            if (exp->data.command.command) {
+                                print_ast(exp->data.command.command, depth + 3);
+                            }
                             break;
                         case EXPANSION_ARITHMETIC:
                             printf("ARITHMETIC: %s\n", exp->data.arithmetic.expression);
@@ -2691,6 +2792,12 @@ void print_ast(ASTNode *node, int depth) {
         case AST_EXPANSION: {
             Expansion *exp = &node->data.expansion;
             switch (exp->type) {
+                case EXPANSION_COMMAND:
+                    printf("AST_EXPANSION COMMAND: %s\n", exp->data.command.command ? "" : "empty");
+                    if (exp->data.command.command) {
+                        print_ast(exp->data.command.command, depth + 1);
+                    }
+                    break;
                 case EXPANSION_PARAMETER:
                     printf("AST_EXPANSION PARAMETER: %s\n", exp->data.parameter.name);
                     break;
@@ -2953,6 +3060,61 @@ void print_ast(ASTNode *node, int depth) {
             }
             printf(", is_quoted: %d, is_dash: %d\n", node->data.io_redirect.is_quoted, node->data.io_redirect.is_dash);
             break;
+
+        case AST_EXPANSION: {
+            Expansion *exp = &node->data.expansion;
+            switch (exp->type) {
+                case EXPANSION_PARAMETER:
+                    printf("AST_EXPANSION PARAMETER: %s\n", exp->data.parameter.name);
+                    break;
+                case EXPANSION_SPECIAL:
+                    printf("AST_EXPANSION SPECIAL: %s\n", exp->data.special.name);
+                    break;
+                case EXPANSION_DEFAULT:
+                    printf("AST_EXPANSION DEFAULT: %s :- %s (colon: %d)\n",
+                           exp->data.default_exp.var, exp->data.default_exp.default_value,
+                           exp->data.default_exp.is_colon);
+                    break;
+                case EXPANSION_ASSIGN:
+                    printf("AST_EXPANSION ASSIGN: %s := %s (colon: %d)\n",
+                           exp->data.default_exp.var, exp->data.default_exp.default_value,
+                           exp->data.default_exp.is_colon);
+                    break;
+                case EXPANSION_SUBSTRING:
+                    printf("AST_EXPANSION SUBSTRING: %s : %s", exp->data.substring.var, exp->data.substring.offset);
+                    if (exp->data.substring.length) printf(" : %s", exp->data.substring.length);
+                    printf("\n");
+                    break;
+                case EXPANSION_LENGTH:
+                    printf("AST_EXPANSION LENGTH: %s\n", exp->data.length.var);
+                    break;
+                case EXPANSION_PREFIX_SHORT:
+                    printf("AST_EXPANSION PREFIX_SHORT: %s # %s\n", exp->data.pattern.var, exp->data.pattern.pattern);
+                    break;
+                case EXPANSION_PREFIX_LONG:
+                    printf("AST_EXPANSION PREFIX_LONG: %s ## %s\n", exp->data.pattern.var, exp->data.pattern.pattern);
+                    break;
+                case EXPANSION_SUFFIX_SHORT:
+                    printf("AST_EXPANSION SUFFIX_SHORT: %s %% %s\n", exp->data.pattern.var, exp->data.pattern.pattern);
+                    break;
+                case EXPANSION_SUFFIX_LONG:
+                    printf("AST_EXPANSION SUFFIX_LONG: %s %%%% %s\n", exp->data.pattern.var, exp->data.pattern.pattern);
+                    break;
+                case EXPANSION_COMMAND:
+                    printf("AST_EXPANSION COMMAND:\n");
+                    print_ast(exp->data.command.command, depth + 1);
+                    break;
+                case EXPANSION_ARITHMETIC:
+                    printf("AST_EXPANSION ARITHMETIC: %s\n", exp->data.arithmetic.expression);
+                    break;
+                case EXPANSION_TILDE:
+                    printf("AST_EXPANSION TILDE: %s\n", exp->data.tilde.user ? exp->data.tilde.user : "");
+                    break;
+                default:
+                    printf("AST_EXPANSION UNKNOWN\n");
+            }
+            break;
+        }
 
         default:
             printf("UNKNOWN_NODE\n");
