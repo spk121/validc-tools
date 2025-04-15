@@ -2,7 +2,7 @@
 #define PARSER_H
 
 #include <stdbool.h>
-#include "tokenizer.h" // For Token, TokenType
+#include "_tokenizer.h" // For Token, TokenType, Tokenizer
 
 // AST node types
 typedef enum {
@@ -24,7 +24,7 @@ typedef enum {
     AST_EXPANSION
 } ASTNodeType;
 
-// Redirect operators
+// Redirect operations
 typedef enum {
     LESS,       // <
     GREAT,      // >
@@ -35,12 +35,12 @@ typedef enum {
     GREATAND,   // >&
     LESSGREAT,  // <>
     CLOBBER     // >|
-} RedirectOperator;
+} RedirectOperation;
 
 // Redirect structure
 typedef struct Redirect {
     char *io_number;        // e.g., "2"
-    RedirectOperator operator;
+    RedirectOperation operation;
     char *filename;         // For <, >, etc.
     char *delimiter;        // For heredocs
     char *heredoc_content;  // Heredoc content
@@ -140,11 +140,11 @@ typedef struct ASTNode {
         struct { // AST_AND_OR
             struct ASTNode *left;
             struct ASTNode *right;
-            int operator; // TOKEN_AND_IF, TOKEN_OR_IF
+            TokenType operation; // TOKEN_AND_IF, TOKEN_OR_IF, TOKEN_UNSPECIFIED
         } and_or;
         struct { // AST_LIST
             struct ASTNode *and_or;
-            int separator; // TOKEN_SEMI, TOKEN_AMP
+            TokenType separator; // TOKEN_SEMI, TOKEN_AMP, TOKEN_UNSPECIFIED
             struct ASTNode *next;
         } list;
         struct { // AST_COMPLETE_COMMAND
@@ -208,6 +208,10 @@ typedef struct ASTNode {
 typedef struct {
     PtrArray *tokens;
     int pos;
+    char *error_msg;        // Error message for diagnostics
+    int line_number;        // Current line number
+    Tokenizer *tokenizer;   // For re-tokenizing command substitutions
+    AliasStore *alias_store;// For alias expansion in command substitutions
 } Parser;
 
 typedef enum {
@@ -217,10 +221,10 @@ typedef enum {
 } ParseStatus;
 
 // Function prototypes
-Parser *parser_create(void);
+Parser *parser_create(Tokenizer *tokenizer, AliasStore *alias_store);
 void parser_destroy(Parser *p);
 ParseStatus parser_apply_tokens(Parser *p, const PtrArray *tokens, ASTNode **ast);
 void ast_print(ASTNode *node, int depth);
-void ast_free(ASTNode *node);
 
 #endif
+
