@@ -7,36 +7,41 @@
 
 typedef enum
 {
+    TOKEN_UNSPECIFIED = 0, 
     TOKEN_WORD,          // Command, argument, variable, or here-document content
-    TOKEN_KEYWORD,       // Reserved words: if, while, for, etc.
-    TOKEN_OPERATOR,      // ;, |, &&, ||, etc.
-    TOKEN_IO_NUMBER,     // Number before redirection (e.g., 2>)
-    TOKEN_TILDE,         // ~ or ~user
     TOKEN_ASSIGNMENT,    // Variable assignment (e.g., var=value)
     TOKEN_NEWLINE,       // \n
-    TOKEN_EOF,           // End of input
-    TOKEN_AND_IF,        // &&
-    TOKEN_OR_IF,         // ||
-    TOKEN_DSEMI,         // ;;
+    TOKEN_IO_NUMBER,     // Number before redirection (e.g., 2>)
+    TOKEN_OPERATOR,      // |, (,  ),  {,  }, etc.
+    TOKEN_KEYWORD,       // Reserved words: if, while, for, etc.
+    TOKEN_PARAM,         // Parameter expansion ${...} (e.g., "${var}", "${var:-word}", "${var-word}", "${var:=word}", "${var=word}", "${var:?word}", "${var?word}", "${var:+word}", "${var+word}", "${#parameter}", "${parameter%word}", "${parameter%%word}", "${parameter#word}", "${parameter##word}")
+    TOKEN_DPAREN,        // Command substitution $(...) including inner content
+    TOKEN_BACKTICK,      // Command substitution `...` including inner content
+    TOKEN_ARITH,         // Arithmetic expansion $((...)) including inner content
+    TOKEN_TILDE,         // ~ or ~user
     TOKEN_DLESS,         // << (heredoc operator, followed by TOKEN_HEREDOC_DELIM and TOKEN_WORD)
     TOKEN_DGREAT,        // >>
+    TOKEN_DLESSDASH,     // <<- (heredoc with tab stripping, followed by TOKEN_HEREDOC_DELIM and TOKEN_WORD)
     TOKEN_LESSAND,       // <&
     TOKEN_GREATAND,      // >&
     TOKEN_LESSGREAT,     // <>
-    TOKEN_DLESSDASH,     // <<- (heredoc with tab stripping, followed by TOKEN_HEREDOC_DELIM and TOKEN_WORD)
     TOKEN_CLOBBER,       // >|
-    TOKEN_COMMENT,       // Comment starting with # until newline (e.g., "# text")
-    TOKEN_DPAREN,        // Command substitution $(...) including inner content
-    TOKEN_BACKTICK,      // Command substitution `...` including inner content
     TOKEN_HEREDOC_DELIM, // Here-document delimiter (e.g., "EOF", "'EOF'")
-    TOKEN_ARITH,         // Arithmetic expansion $((...)) including inner content
-    TOKEN_PARAM          // Parameter expansion ${...} (e.g., "${var}", "${var:-word}", "${var-word}", "${var:=word}", "${var=word}", "${var:?word}", "${var?word}", "${var:+word}", "${var+word}", "${#parameter}", "${parameter%word}", "${parameter%%word}", "${parameter#word}", "${parameter##word}")
+    TOKEN_DSEMI,         // ;;
+    TOKEN_SEMI,          // ;
+    TOKEN_AMP,           // &
+    TOKEN_AND_IF,        // &&
+    TOKEN_OR_IF,         // ||
+    TOKEN_COMMENT,       // Comment starting with # until newline (e.g., "# text")
+    TOKEN_EOF,           // End of input
 } TokenType;
 
 typedef struct
 {
     String *text;   // Token content (UTF-8); for TOKEN_WORD after TOKEN_HEREDOC_DELIM, contains content only
     TokenType type; // Token type
+    int quoted;     // Unused for now, but could be use to indicate that the surrounding quote
+                    // have been stripped off.
 } Token;
 
 // Tokenizer status for interactive mode
@@ -83,5 +88,5 @@ int is_valid_name_string(const String *name);
 // Tokenize input into a PtrArray of Token*
 TokenizerStatus tokenize_zstring(Tokenizer *tokenizer, const char *input, PtrArray *tokens, AliasStore *alias_store, int (*get_line)(char *buf, int size));
 TokenizerStatus tokenize_string(Tokenizer *tokenizer, String *input, PtrArray *tokens, AliasStore *alias_store, int (*get_line)(char *buf, int size));
-
+void token_print(Token *t);
 #endif

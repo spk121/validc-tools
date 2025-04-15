@@ -200,13 +200,22 @@ static int process_operator(const char **p, String *current_token, TokenType *ty
         *type = TOKEN_CLOBBER;
         *p += 2;
     }
+    else if (*start == '&')
+    {
+        *type = TOKEN_AMP;
+        *p += 1;
+    }
+    else if (*start == ';')
+    {
+        *type = TOKEN_SEMI;
+        *p += 1;
+    }
     else if (*start == '<' || *start == '>' || *start == '|' ||
-             *start == '&' || *start == ';' || *start == '(' ||
-             *start == ')')
+             *start == '(' || *start == ')')
     {
         *type = TOKEN_OPERATOR;
         *p += 1;
-    }
+    }        
     else
     {
         return -1;
@@ -1159,3 +1168,44 @@ TokenizerStatus tokenize_string(Tokenizer *tokenizer, String *input, PtrArray *t
         return TOKENIZER_FAILURE;
     return tokenize_zstring(tokenizer, string_data(input), tokens, alias_store, get_line);
 }
+
+// Print token (for debugging)
+void token_print(Token *t) {
+    if (!t) {
+        printf("NULL token\n");
+        return;
+    }
+    const char *type_str = "UNKNOWN";
+    switch (t->type) {
+        case TOKEN_UNSPECIFIED: type_str = "UNSPECIFIED"; break;
+        case TOKEN_WORD: type_str = "WORD"; break;
+        case TOKEN_ASSIGNMENT: type_str = "ASSIGNMENT"; break;
+        case TOKEN_NEWLINE: type_str = "NEWLINE"; break;
+        case TOKEN_IO_NUMBER: type_str = "IO_NUMBER"; break;
+        case TOKEN_OPERATOR: type_str = "OPERATOR"; break;
+        case TOKEN_KEYWORD: type_str = "KEYWORD"; break;
+        case TOKEN_PARAM: type_str = "PARAM"; break;
+        case TOKEN_DPAREN: type_str = "DPAREN"; break;
+        case TOKEN_BACKTICK: type_str = "BACKTICK"; break;
+        case TOKEN_ARITH: type_str = "ARITH"; break;
+        case TOKEN_TILDE: type_str = "TILDE"; break;
+        case TOKEN_DLESS: type_str = "DLESS"; break;
+        case TOKEN_DGREAT: type_str = "DGREAT"; break;
+        case TOKEN_DLESSDASH: type_str = "DLESSDASH"; break;
+        case TOKEN_LESSAND: type_str = "LESSAND"; break;
+        case TOKEN_GREATAND: type_str = "GREATAND"; break;
+        case TOKEN_LESSGREAT: type_str = "LESSGREAT"; break;
+        case TOKEN_CLOBBER: type_str = "CLOBBER"; break;
+        case TOKEN_HEREDOC_DELIM: type_str = "HEREDOC_DELIM"; break;
+        case TOKEN_DSEMI: type_str = "DSEMI"; break;
+        case TOKEN_SEMI: type_str = "SEMI"; break;
+        case TOKEN_AMP: type_str = "AMP"; break;
+        case TOKEN_AND_IF: type_str = "AND_IF"; break;
+        case TOKEN_OR_IF: type_str = "OR_IF"; break;
+        case TOKEN_COMMENT: type_str = "COMMENT"; break;
+        case TOKEN_EOF: type_str = "EOF"; break;
+    }
+    printf("Token(type=%s, text='%s', quoted=%d)\n", 
+           type_str, string_data(t->text), t->quoted);
+}
+
