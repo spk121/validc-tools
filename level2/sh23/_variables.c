@@ -316,3 +316,168 @@ void variable_store_set_options(VariableStore *self, const char *opts) {
     strncpy(self->options, opts, sizeof(self->options) - 1);
     self->options[sizeof(self->options) - 1] = '\0';
 }
+
+// Helper function to match a pattern (basic glob-style matching for % and #)
+static bool pattern_matches(const char *str, const char *pattern) {
+    // POSIX shell patterns for % and # are simple suffix/prefix matches
+    // For simplicity, treat pattern as a literal string unless it contains '*'
+    if (strchr(pattern, '*')) {
+        // Handle '*' as a wildcard (matches any sequence)
+        size_t pat_len = strlen(pattern);
+        if (pattern[0] == '*' && pat_len == 1) {
+            return true; // '*' matches anything
+        }
+        if (pattern[0] == '*' && strstr(str, pattern + 1)) {
+            return true; // '*suffix' matches if str contains suffix
+        }
+        if (pattern[pat_len - 1] == '*' && strncmp(str, pattern, pat_len - 1) == 0) {
+            return true; // 'prefix*' matches if str starts with prefix
+        }
+        return false;
+    }
+    // Literal match
+    return strstr(str, pattern) != NULL;
+}
+
+// ${parameter:-[word]} - Return word if parameter is unset or null, else parameter's value
+const char *variable_store_default_value(VariableStore *self, const char *name, const char *word) {
+    if (!self || !name) return word ? word : "";
+    const char *value = variable_store_get_variable(self, name);
+    if (!value || *value == '\0') {
+        return word ? word : "";
+    }
+    return value;
+}
+
+// ${parameter:=[word]} - Assign word to parameter if unset or null, return assigned value
+const char *variable_store_assign_default(VariableStore *self, const char *name, const char *word) {
+    if (!self || !name) return word ? word : "";
+    const char *value = variable_store_get_variable(self, name);
+    if (!value || *value == '\0') {
+        if (!is_special_variable(name)) {
+            int idx = find_variable_index(self->variables, name);
+            if (idx >= 0) {
+                Variable *var = ptr_array_get(self->variables, idx);
+                if (!var->read_only) {
+                    string_clear(var->value);
+                    string_append_zstring(var->value, word ? word : "");
+                } else {
+                    fprintf(stderr, "Variable %s is read-only\n", name);
+                    return "";
+                }
+            } else {
+                variable_store_set_variable(self, name, word ? word : "");
+            }
+        }
+        return word ? word : "";
+    }
+    return value;
+}
+
+// ${parameter:?[word]} - If unset or null, print word to stderr and exit, else return value
+const char *variable_store_indicate_error(VariableStore *self, const char *name, const char *word) {
+    if (!self || !name) {
+        fprintf(stderr, "%s: parameter null or not set\n", word ? word : "");
+        exit(1);
+    }
+    const char *value = variable_store_get_variable(self, name);
+    if (!value || *value == '\0') {
+        fprintf(stderr, "%s: parameter null or not set\n", word ? word : "");
+        exit(1);
+    }
+    return value;
+}
+
+// ${parameter:+[word]} - Return word if parameter is set and non-null, else null
+const char *variable_store_alternative_value(VariableStore *self, const char *name, const char *word) {
+    if (!self || !name) return "";
+    const char *value = variable_store_get_variable(self, name);
+    if (value && *value != '\0') {
+        return word ? word : "";
+    }
+    return "";
+}
+
+// ${#parameter} - Return length of parameter's value
+size_t variable_store_length(VariableStore *self, const char *name) {
+    if (!self || !name) return 0;
+    const char *value = variable_store_get_variable(self, name);
+    return value ? strlen(value) : 0;
+}
+
+// ${parameter%[word]} or ${parameter%%[word]} - Remove shortest/longest suffix matching pattern
+const char *variable_store_remove_suffix(VariableStore *self, const char *name, const char *pattern, bool longest) {
+    static char result[1024]; // Static buffer for result
+    result[0] = '\0';
+    
+    if (!self || !name) return result;
+    const char *value = variable_store_get_variable(self, name);
+    if (!value || !pattern) {
+        strncpy(result, value ? value : "", sizeof(result) - 1);
+        result[sizeof(result) - 1] = '\0';
+        return result;
+    }
+
+    strncpy(result, value, sizeof(result) - 1);
+    result[sizeof(result) - 1] = '\0';
+    
+    if (pattern_matches(value, pattern)) {
+        size_t value_len = strlen(value);
+        size_t pattern_len = strlen(pattern);
+        
+        if (pattern[0] == '*' && pattern_len > 1) {
+            const char *suffix = pattern + 1;
+            size_t suffix_len = pattern_len - 1;
+            char *match = strstr(value, suffix);
+            if (match && (!longest || (longest && match == value + value_len - suffix_len))) {
+                size_t pos = match - value;
+                result[pos] = '\0';
+            }
+        } else if (value_len >= pattern_len) {
+            char *end = result + value_len - pattern_len;
+            if (strcmp(end, pattern) == 0 && (!longest || longest)) {
+                *end = '\0';
+            }
+        }
+    }
+    
+    return result;
+}
+
+// ${parameter#[word]} or ${parameter##[word]} - Remove shortest/longest prefix matching pattern
+const char *variable_store_remove_prefix(VariableStore *self, const char *name, const char *pattern, bool longest) {
+    static char result[1024]; // Static buffer for result
+    result[0] = '\0';
+    
+    if (!self || !name) return result;
+    const char *value = variable_store_get_variable(self, name);
+    if (!value || !pattern) {
+        strncpy(result, value ? value : "", sizeof(result) - 1);
+        result[sizeof(result) - 1] = '\0';
+        return result;
+    }
+
+    strncpy(result, value, sizeof(result) - 1);
+    result[sizeof(result) - 1] = '\0';
+    
+    if (pattern_matches(value, pattern)) {
+        size_t value_len = strlen(value);
+        size_t pattern_len = strlen(pattern);
+        
+        if (pattern[pattern_len - 1] == '*' && pattern_len > 1) {
+            const char *prefix = pattern;
+            size_t prefix_len = pattern_len - 1;
+            if (strncmp(value, prefix, prefix_len) == 0 && (!longest || longest)) {
+                strncpy(result, value + prefix_len, sizeof(result) - 1);
+                result[sizeof(result) - 1] = '\0';
+            }
+        } else if (value_len >= pattern_len) {
+            if (strncmp(result, pattern, pattern_len) == 0 && (!longest || longest)) {
+                strncpy(result, value + pattern_len, sizeof(result) - 1);
+                result[sizeof(result) - 1] = '\0';
+            }
+        }
+    }
+    
+    return result;
+}

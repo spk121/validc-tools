@@ -35,4 +35,13 @@ void variable_store_set_positional_params(VariableStore *self, int argc, char **
 void variable_store_set_background_pid(VariableStore *self, long pid);
 void variable_store_set_options(VariableStore *self, const char *opts);
 
+// New parameter expansion functions
+const char *variable_store_default_value(VariableStore *self, const char *name, const char *word);
+const char *variable_store_assign_default(VariableStore *self, const char *name, const char *word);
+const char *variable_store_indicate_error(VariableStore *self, const char *name, const char *word);
+const char *variable_store_alternative_value(VariableStore *self, const char *name, const char *word);
+size_t variable_store_length(VariableStore *self, const char *name);
+const char *variable_store_remove_suffix(VariableStore *self, const char *name, const char *pattern, bool longest);
+const char *variable_store_remove_prefix(VariableStore *self, const char *name, const char *pattern, bool longest);
+
 #endif
