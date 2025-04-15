@@ -6,6 +6,7 @@
 #include <string.h>
 #include <errno.h>
 #include <signal.h>
+#include <limits.h>
 #include "builtins.h"
 #include "string.h"
 #include "tokenizer.h"
@@ -15,7 +16,7 @@ bool is_special_builtin(const char *name) {
     const char *special_builtins[] = {
         ":", ".", "eval", "exec", "exit", "export", "readonly",
         "set", "shift", "times", "trap", "unset", "break", "continue", "return",
-        NULL
+        "cd", NULL
     };
     for (int i = 0; special_builtins[i]; i++) {
         if (strcmp(name, special_builtins[i]) == 0) {
@@ -37,6 +38,184 @@ static int get_signal_number(const char *sig) {
     long n = strtol(sig, &endptr, 10);
     if (*endptr == '\0' && n >= 0 && n <= 31) return (int)n;
     return -1;
+}
+
+static int apply_redirect(Redirect *redir) {
+    int fd = redir->io_number ? atoi(redir->io_number) : (redir->operation == LESS ? STDIN_FILENO : STDOUT_FILENO);
+    int new_fd = -1;
+
+    switch (redir->operation) {
+        case LESS:
+            new_fd = open(redir->filename, O_RDONLY);
+            break;
+        case GREAT:
+            new_fd = open(redir->filename, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+            break;
+        case DGREAT:
+            new_fd = open(redir->filename, O_WRONLY | O_CREAT | O_APPEND, 0644);
+            break;
+        case DLESS: {
+            int pipefd[2];
+            if (pipe(pipefd) == -1) return -1;
+            write(pipefd[1], redir->heredoc_content, strlen(redir->heredoc_content));
+            close(pipefd[1]);
+            new_fd = pipefd[0];
+            break;
+        }
+        case DLESSDASH:
+            return apply_redirect(redir);
+        case LESSAND:
+            new_fd = atoi(redir->filename);
+            break;
+        case GREATAND:
+            new_fd = atoi(redir->filename);
+            break;
+        case LESSGREAT:
+            new_fd = open(redir->filename, O_RDWR | O_CREAT, 0644);
+            break;
+        case CLOBBER:
+            new_fd = open(redir->filename, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+            break;
+        default:
+            return -1;
+    }
+
+    if (new_fd == -1) return -1;
+    if (dup2(new_fd, fd) == -1) {
+        close(new_fd);
+        return -1;
+    }
+    if (redir->operation != LESSAND && redir->operation != GREATAND) {
+        close(new_fd);
+    }
+    return 0;
+}
+
+static ExecStatus builtin_cd(Executor *exec, char **argv, int argc) {
+    bool physical = false; // -P: resolve symlinks
+    const char *dir = NULL;
+    int optind = 1;
+
+    // Parse options
+    if (argc > 1 && argv[1][0] == '-') {
+        if (strcmp(argv[1], "-L") == 0) {
+            physical = false;
+            optind = 2;
+        } else if (strcmp(argv[1], "-P") == 0) {
+            physical = true;
+            optind = 2;
+        } else if (strcmp(argv[1], "--") == 0) {
+            optind = 2;
+        } else {
+            fprintf(stderr, "cd: %s: invalid option\n", argv[1]);
+            executor_set_status(exec, 2);
+            if (!exec->is_interactive) exit(2);
+            return EXEC_FAILURE;
+        }
+    }
+
+    // Determine directory
+    if (optind < argc) {
+        dir = argv[optind];
+        if (optind + 1 < argc) {
+            fprintf(stderr, "cd: too many arguments\n");
+            executor_set_status(exec, 2);
+            if (!exec->is_interactive) exit(2);
+            return EXEC_FAILURE;
+        }
+    }
+
+    // Handle special cases: no dir (use $HOME), or dir is "-"
+    if (!dir || dir[0] == '\0') {
+        dir = variable_store_get_variable(exec->vars, "HOME");
+        if (!dir || dir[0] == '\0') {
+            fprintf(stderr, "cd: HOME not set\n");
+            executor_set_status(exec, 1);
+            if (!exec->is_interactive) exit(1);
+            return EXEC_FAILURE;
+        }
+    } else if (strcmp(dir, "-") == 0) {
+        dir = variable_store_get_variable(exec->vars, "OLDPWD");
+        if (!dir || dir[0] == '\0') {
+            fprintf(stderr, "cd: OLDPWD not set\n");
+            executor_set_status(exec, 1);
+            if (!exec->is_interactive) exit(1);
+            return EXEC_FAILURE;
+        }
+        // Print directory when using "-"
+        printf("%s\n", dir);
+    }
+
+    // Save current PWD for OLDPWD
+    char *oldpwd = getcwd(NULL, 0);
+    if (!oldpwd) {
+        fprintf(stderr, "cd: getcwd: %s\n", strerror(errno));
+        executor_set_status(exec, 1);
+        if (!exec->is_interactive) exit(1);
+        return EXEC_FAILURE;
+    }
+
+    // Change directory
+    if (chdir(dir) != 0) {
+        fprintf(stderr, "cd: %s: %s\n", dir, strerror(errno));
+        free(oldpwd);
+        executor_set_status(exec, 1);
+        if (!exec->is_interactive) exit(1);
+        return EXEC_FAILURE;
+    }
+
+    // Get new PWD
+    char *newpwd = NULL;
+    if (physical) {
+        // -P: Use physical path
+        newpwd = getcwd(NULL, 0);
+        if (!newpwd) {
+            fprintf(stderr, "cd: getcwd: %s\n", strerror(errno));
+            free(oldpwd);
+            executor_set_status(exec, 1);
+            if (!exec->is_interactive) exit(1);
+            return EXEC_FAILURE;
+        }
+    } else {
+        // -L: Use logical path (dir, possibly resolved relative to current dir)
+        if (dir[0] == '/' || !variable_store_get_variable(exec->vars, "PWD")) {
+            // Absolute path or no PWD: use dir as-is
+            newpwd = realpath(dir, NULL);
+            if (!newpwd) {
+                fprintf(stderr, "cd: realpath: %s\n", strerror(errno));
+                free(oldpwd);
+                executor_set_status(exec, 1);
+                if (!exec->is_interactive) exit(1);
+                return EXEC_FAILURE;
+            }
+        } else {
+            // Relative path: Construct logical path
+            String *path = string_create();
+            string_append_zstring(path, variable_store_get_variable(exec->vars, "PWD"));
+            if (path->buffer[path->len - 1] != '/') {
+                string_append_char(path, '/');
+            }
+            string_append_zstring(path, dir);
+            newpwd = realpath(string_cstr(path), NULL);
+            string_destroy(path);
+            if (!newpwd) {
+                fprintf(stderr, "cd: realpath: %s\n", strerror(errno));
+                free(oldpwd);
+                executor_set_status(exec, 1);
+                if (!exec->is_interactive) exit(1);
+                return EXEC_FAILURE;
+            }
+        }
+    }
+
+    // Update environment variables
+    variable_store_set_variable(exec->vars, "OLDPWD", oldpwd);
+    variable_store_set_variable(exec->vars, "PWD", newpwd);
+    free(oldpwd);
+    free(newpwd);
+
+    executor_set_status(exec, 0);
+    return EXEC_SUCCESS;
 }
 
 static ExecStatus builtin_colon(Executor *exec, char **argv, int argc) {
@@ -128,14 +307,174 @@ static ExecStatus builtin_eval(Executor *exec, char **argv, int argc) {
 }
 
 static ExecStatus builtin_exec(Executor *exec, char **argv, int argc) {
-    if (argc == 1) {
+    bool clear_env = false;  // -c option
+    bool login_shell = false; // -l option
+    char *argv0_name = NULL; // -a name
+    int optind = 1;
+    char *command = NULL;
+    int cmd_argc = 0;
+    char **cmd_argv = NULL;
+
+    // Parse options
+    while (optind < argc && argv[optind][0] == '-' && argv[optind][1] != '\0') {
+        if (strcmp(argv[optind], "-c") == 0) {
+            clear_env = true;
+            optind++;
+        } else if (strcmp(argv[optind], "-l") == 0) {
+            login_shell = true;
+            optind++;
+        } else if (strcmp(argv[optind], "-a") == 0) {
+            if (optind + 1 >= argc) {
+                fprintf(stderr, "exec: -a: option requires an argument\n");
+                executor_set_status(exec, 2);
+                if (!exec->is_interactive) exit(2);
+                return EXEC_FAILURE;
+            }
+            argv0_name = argv[optind + 1];
+            optind += 2;
+        } else if (strcmp(argv[optind], "--") == 0) {
+            optind++;
+            break;
+        } else {
+            fprintf(stderr, "exec: %s: invalid option\n", argv[optind]);
+            executor_set_status(exec, 2);
+            if (!exec->is_interactive) exit(2);
+            return EXEC_FAILURE;
+        }
+    }
+
+    // Collect command and arguments
+    if (optind < argc && argv[optind][0] != '>' && argv[optind][0] != '<' &&
+        strcmp(argv[optind], ">>") != 0 && strcmp(argv[optind], ">&") != 0 &&
+        strcmp(argv[optind], "<&") != 0 && strcmp(argv[optind], "<>") != 0) {
+        command = argv[optind];
+        cmd_argc = 0;
+        cmd_argv = malloc(sizeof(char *) * (argc - optind + 1));
+        if (!cmd_argv) {
+            fprintf(stderr, "exec: memory allocation failed\n");
+            executor_set_status(exec, 1);
+            if (!exec->is_interactive) exit(1);
+            return EXEC_FAILURE;
+        }
+        for (int i = optind; i < argc; i++) {
+            // Stop at redirection operators
+            if (argv[i][0] == '>' || argv[i][0] == '<' ||
+                strcmp(argv[i], ">>") == 0 || strcmp(argv[i], ">&") == 0 ||
+                strcmp(argv[i], "<&") == 0 || strcmp(argv[i], "<>") == 0) {
+                break;
+            }
+            cmd_argv[cmd_argc++] = argv[i];
+        }
+        cmd_argv[cmd_argc] = NULL;
+        optind += cmd_argc;
+    }
+
+    // Parse and apply redirections
+    while (optind < argc) {
+        Redirect redir = {0};
+        bool valid = false;
+        char *io_number = NULL;
+        char *target = NULL;
+
+        // Check for io_number (e.g., 2>)
+        if (optind + 1 < argc && isdigit(argv[optind][0])) {
+            io_number = argv[optind];
+            optind++;
+        }
+
+        // Identify redirection operator
+        if (optind >= argc) {
+            fprintf(stderr, "exec: missing redirection target\n");
+            free(cmd_argv);
+            executor_set_status(exec, 1);
+            if (!exec->is_interactive) exit(1);
+            return EXEC_FAILURE;
+        }
+
+        if (strcmp(argv[optind], ">") == 0) {
+            redir.operation = GREAT;
+            valid = true;
+        } else if (strcmp(argv[optind], ">>") == 0) {
+            redir.operation = DGREAT;
+            valid = true;
+        } else if (strcmp(argv[optind], "<") == 0) {
+            redir.operation = LESS;
+            valid = true;
+        } else if (strcmp(argv[optind], ">&") == 0) {
+            redir.operation = GREATAND;
+            valid = true;
+        } else if (strcmp(argv[optind], "<&") == 0) {
+            redir.operation = LESSAND;
+            valid = true;
+        } else if (strcmp(argv[optind], "<>") == 0) {
+            redir.operation = LESSGREAT;
+            valid = true;
+        }
+
+        if (!valid) {
+            fprintf(stderr, "exec: %s: invalid redirection\n", argv[optind]);
+            free(cmd_argv);
+            executor_set_status(exec, 1);
+            if (!exec->is_interactive) exit(1);
+            return EXEC_FAILURE;
+        }
+
+        optind++;
+        if (optind >= argc) {
+            fprintf(stderr, "exec: %s: missing redirection target\n", argv[optind - 1]);
+            free(cmd_argv);
+            executor_set_status(exec, 1);
+            if (!exec->is_interactive) exit(1);
+            return EXEC_FAILURE;
+        }
+
+        redir.io_number = io_number;
+        redir.filename = argv[optind];
+        if (apply_redirect(&redir) != 0) {
+            fprintf(stderr, "exec: %s: %s\n", redir.filename, strerror(errno));
+            free(cmd_argv);
+            executor_set_status(exec, 1);
+            if (!exec->is_interactive) exit(1);
+            return EXEC_FAILURE;
+        }
+        optind++;
+    }
+
+    // No command: Apply redirections to current shell
+    if (!command) {
+        free(cmd_argv);
         executor_set_status(exec, 0);
         return EXEC_SUCCESS;
     }
-    execvp(argv[1], &argv[1]);
-    fprintf(stderr, "exec: %s: %s\n", argv[1], strerror(errno));
-    executor_set_status(exec, 1);
-    if (!exec->is_interactive) exit(1); // Exit in non-interactive mode
+
+    // Command given: Replace shell
+    if (clear_env) {
+        clearenv();
+    }
+
+    if (login_shell && cmd_argv[0]) {
+        char *dash_cmd = malloc(strlen(cmd_argv[0]) + 2);
+        if (!dash_cmd) {
+            fprintf(stderr, "exec: memory allocation failed\n");
+            free(cmd_argv);
+            executor_set_status(exec, 1);
+            if (!exec->is_interactive) exit(1);
+            return EXEC_FAILURE;
+        }
+        sprintf(dash_cmd, "-%s", cmd_argv[0]);
+        cmd_argv[0] = dash_cmd;
+    }
+
+    if (argv0_name && cmd_argv[0]) {
+        cmd_argv[0] = argv0_name;
+    }
+
+    execvp(command, cmd_argv);
+    fprintf(stderr, "exec: %s: %s\n", command, strerror(errno));
+    free(cmd_argv);
+    if (login_shell && cmd_argv[0]) free(cmd_argv[0]); // Free dash_cmd
+    executor_set_status(exec, errno == ENOENT ? 127 : 1);
+    if (!exec->is_interactive) exit(errno == ENOENT ? 127 : 1);
     return EXEC_FAILURE;
 }
 
@@ -523,6 +862,7 @@ ExecStatus builtin_execute(Executor *exec, char **argv, int argc) {
         { "return", builtin_return },
         { "break", builtin_break },
         { "continue", builtin_continue },
+        { "cd", builtin_cd },
         { NULL, NULL }
     };
 
