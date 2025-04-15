@@ -2,15 +2,27 @@
 #define EXECUTOR_H
 
 #include <sys/types.h>
-#include "parser.h"
-#include "variables.h"
-#include "function_store.h"
+#include "_parser.h"
+#include "_variables.h"
+#include "_function_store.h"
+#include "string.h"
+#include "ptr_array.h"
+
+typedef struct {
+    int signal;      // Signal number (e.g., SIGINT)
+    String *action;  // Command string (NULL for default, "-" for ignore)
+} Trap;
+
+typedef struct {
+    PtrArray *traps; // Array of Trap*
+} TrapStore;
 
 typedef struct {
     VariableStore *vars;      // Variable storage
     Tokenizer *tokenizer;     // For command substitutions
     AliasStore *alias_store;  // For alias expansion
     FunctionStore *func_store; // Function definitions
+    TrapStore *trap_store;    // Signal traps
     int last_status;          // $? equivalent
     pid_t last_bg_pid;        // $! equivalent
     int pipe_fds[2];          // For pipeline management

@@ -1,5 +1,6 @@
 #include <stdlib.h>
 #include <string.h>
+#include <stdio.h>
 #include "_function_store.h"
 
 FunctionStore *function_store_create(void) {
@@ -15,22 +16,25 @@ FunctionStore *function_store_create(void) {
 
 void function_store_destroy(FunctionStore *store) {
     if (!store) return;
-    for (int i = 0; i < store->functions->len; i++) {
-        Function *func = store->functions->data[i];
+    for (int i = 0; i < ptr_array_size (store->functions); i++) {
+        Function *func = ptr_array_get(store->functions, i);
         free(func->name);
         // Note: ASTNode is owned by parser, not freed here
-        free(func Detta);
+        free(func);
     }
     ptr_array_destroy(store->functions);
     free(store);
 }
 
 void function_store_set(FunctionStore *store, const char *name, ASTNode *body) {
+    if (!name || !*name || !is_valid_name_zstring(name)) {
+        fprintf(stderr, "function_store_set: invalid function name: %s\n", name ? name : "");
+        return;
+    }
+
     // Check if function already exists
-    for (int i = 0; i < store->functions->len; i++) {
-        Function *func = store->functions->data[i];
-        if (strcmp(func->name, name) == 0) {
-            // Update existing function
+    for (int i = 0; i < ptr_array_size (store->functions); i++) {
+        Function *func = ptr_array_get(store->functions, i);
             func->body = body;
             return;
         }
