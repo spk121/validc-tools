@@ -782,51 +782,122 @@ static ExecStatus builtin_readonly(Executor *exec, char **argv, int argc) {
     return EXEC_SUCCESS;
 }
 
-static ExecStatus builtin_set(Executor *exec, char **argv, int argc) {
-    if (argc == 1) {
-        variable_store_dump_variables(exec->vars);
-        executor_set_status(exec, 0);
-        return EXEC_SUCCESS;
-    }
-    ptr_array_clear(exec->vars->positional_params);
-    for (int i = 1; i < argc; i++) {
-        ptr_array_append(exec->vars->positional_params, strdup(argv[i]));
-    }
-    executor_set_status(exec, 0);
-    return EXEC_SUCCESS;
-}
 
-static ExecStatus builtin_shift(Executor *exec, char **argv, int argc) {
-    int n = 1;
-    if (argc > 1) {
-        char *endptr;
-        long val = strtol(argv[1], &endptr, 10);
-        if (*endptr != '\0' || val < 0) {
-            fprintf(stderr, "shift: %s: invalid number\n", argv[1]);
+static ExecStatus builtin_set(Executor *exec, char **argv, int argc) {
+    int optind = 1;
+    bool set_options = false;
+    bool unset_options = false;
+
+    // Parse options
+    while (optind < argc && argv[optind][0] == '-' && argv[optind][1] != '\0') {
+        if (strcmp(argv[optind], "--") == 0) {
+            optind++;
+            break;
+        }
+        for (int i = 1; argv[optind][i]; i++) {
+            switch (argv[optind][i]) {
+                case 'e':
+                    exec->errexit = true;
+                    break;
+                case 'u':
+                    exec->nounset = true;
+                    break;
+                case 'x':
+                    exec->xtrace = true;
+                    break;
+                default:
+                    fprintf(stderr, "set: -%c: invalid option\n", argv[optind][i]);
+                    executor_set_status(exec, 2);
+                    if (!exec->is_interactive) exit(2);
+                    return EXEC_FAILURE;
+            }
+        }
+        optind++;
+    }
+
+    // Handle +e, +u, +x
+    while (optind < argc && argv[optind][0] == '+' && argv[optind][1] != '\0') {
+        for (int i = 1; argv[optind][i]; i++) {
+            switch (argv[optind][i]) {
+                case 'e':
+                    exec->errexit = false;
+                    break;
+                case 'u':
+                    exec->nounset = false;
+                    break;
+                case 'x':
+                    exec->xtrace = false;
+                    break;
+                default:
+                    fprintf(stderr, "set: +%c: invalid option\n", argv[optind][i]);
+                    executor_set_status(exec, 2);
+                    if (!exec->is_interactive) exit(2);
+                    return EXEC_FAILURE;
+            }
+        }
+        optind++;
+    }
+
+    // Handle -o, +o
+    if (optind < argc && strcmp(argv[optind], "-o") == 0) {
+        optind++;
+        if (optind >= argc) {
+            // Display options
+            printf("errexit\t%s\n", exec->errexit ? "on" : "off");
+            printf("nounset\t%s\n", exec->nounset ? "on" : "off");
+            printf("xtrace\t%s\n", exec->xtrace ? "on" : "off");
+            executor_set_status(exec, 0);
+            return EXEC_SUCCESS;
+        }
+        if (strcmp(argv[optind], "errexit") == 0) {
+            exec->errexit = true;
+        } else if (strcmp(argv[optind], "nounset") == 0) {
+            exec->nounset = true;
+        } else if (strcmp(argv[optind], "xtrace") == 0) {
+            exec->xtrace = true;
+        } else {
+            fprintf(stderr, "set: -o %s: invalid option\n", argv[optind]);
             executor_set_status(exec, 2);
-            if (!exec->is_interactive) exit(2); // Exit in non-interactive mode
+            if (!exec->is_interactive) exit(2);
             return EXEC_FAILURE;
         }
-        n = (int)val;
-    }
-    if (argc > 2) {
-        fprintf(stderr, "shift: too many arguments\n");
-        executor_set_status(exec, 2);
-        if (!exec->is_interactive) exit(2); // Exit in non-interactive mode
-        return EXEC_FAILURE;
-    }
-    if (n > exec->vars->positional_params->len) {
-        fprintf(stderr, "shift: shift count out of range\n");
-        executor_set_status(exec, 1);
-        if (!exec->is_interactive) exit(1); // Exit in non-interactive mode
-        return EXEC_FAILURE;
-    }
-    for (int i = 0; i < n; i++) {
-        if (exec->vars->positional_params->len > 0) {
-            free(exec->vars->positional_params->data[0]);
-            ptr_array_remove(exec->vars->positional_params, 0);
+        optind++;
+    } else if (optind < argc && strcmp(argv[optind], "+o") == 0) {
+        optind++;
+        if (optind >= argc) {
+            // Scriptable output
+            if (exec->errexit) printf("set -o errexit\n");
+            if (exec->nounset) printf("set -o nounset\n");
+            if (exec->xtrace) printf("set -o xtrace\n");
+            executor_set_status(exec, 0);
+            return EXEC_SUCCESS;
         }
+        if (strcmp(argv[optind], "errexit") == 0) {
+            exec->errexit = false;
+        } else if (strcmp(argv[optind], "nounset") == 0) {
+            exec->nounset = false;
+        } else if (strcmp(argv[optind], "xtrace") == 0) {
+            exec->xtrace = false;
+        } else {
+            fprintf(stderr, "set: +o %s: invalid option\n", argv[optind]);
+            executor_set_status(exec, 2);
+            if (!exec->is_interactive) exit(2);
+            return EXEC_FAILURE;
+        }
+        optind++;
     }
+
+    // Set positional parameters
+    if (optind < argc) {
+        ptr_array_clear(exec->vars->positional_params);
+        for (int i = optind; i < argc; i++) {
+            ptr_array_append(exec->vars->positional_params, strdup(argv[i]));
+        }
+    } else if (optind == 1) {
+        // No args or options: dump variables
+        variable_store_dump_variables(exec->vars);
+    }
+
     executor_set_status(exec, 0);
     return EXEC_SUCCESS;
 }

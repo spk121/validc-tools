@@ -36,6 +36,9 @@ Executor *executor_create(VariableStore *vars, Tokenizer *tokenizer, AliasStore 
     exec->loop_depth = 0;
     exec->function_depth = 0;
     exec->is_interactive = true;
+    exec->errexit = false;
+    exec->nounset = false;
+    exec->xtrace = false;
     trap_store_set_executor(exec);
     return exec;
 }
@@ -418,6 +421,14 @@ static ExecStatus exec_simple_command(Executor *exec, ASTNode *node) {
             return EXEC_FAILURE;
         }
         redir = redir->next;
+    }
+
+    if (exec->xtrace && expanded->len > 0) {
+        fprintf(stderr, "+");
+        for (int i = 0; i < expanded->len; i++) {
+            fprintf(stderr, " %s", (char *)expanded->data[i]);
+        }
+        fprintf(stderr, "\n");
     }
 
     // Check for builtins
@@ -809,45 +820,72 @@ ExecStatus executor_run(Executor *exec, ASTNode *ast) {
         return EXEC_SUCCESS;
     }
 
+    ExecStatus ret = EXEC_SUCCESS;
+
     switch (ast->type) {
         case AST_SIMPLE_COMMAND:
-            return exec_simple_command(exec, ast);
+            ret = exec_simple_command(exec, ast);
+            break;
         case AST_PIPELINE:
-            return exec_pipeline(exec, ast);
+            ret = exec_pipeline(exec, ast);
+            break;
         case AST_AND_OR:
-            return exec_and_or(exec, ast);
+            ret = exec_and_or(exec, ast);
+            break;
         case AST_LIST:
-            return exec_list(exec, ast);
+            ret = exec_list(exec, ast);
+            break;
         case AST_COMPLETE_COMMAND:
-            return executor_run(exec, ast->data.complete_command.list);
+            ret = executor_run(exec, ast->data.complete_command.list);
+            break;
         case AST_PROGRAM:
-            return executor_run(exec, ast->data.program.commands);
+            ret = executor_run(exec, ast->data.program.commands);
+            break;
         case AST_IF_CLAUSE:
-            return exec_if_clause(exec, ast);
+            ret = exec_if_clause(exec, ast);
+            break;
         case AST_FOR_CLAUSE:
-            return exec_for_clause(exec, ast);
+            ret = exec_for_clause(exec, ast);
+            break;
         case AST_WHILE_CLAUSE:
-            return exec_while_clause(exec, ast);
+            ret = exec_while_clause(exec, ast);
+            break;
         case AST_UNTIL_CLAUSE:
-            return exec_until_clause(exec, ast);
+            ret = exec_until_clause(exec, ast);
+            break;
         case AST_CASE_CLAUSE:
-            return exec_case_clause(exec, ast);
+            ret = exec_case_clause(exec, ast);
+            break;
         case AST_BRACE_GROUP: {
-            ExecStatus ret = executor_run(exec, ast->data.brace_group.body);
-            if (ret == EXEC_RETURN) return ret;
-            return ret;
+            ret = executor_run(exec, ast->data.brace_group.body);
+            break;
         }
         case AST_SUBSHELL:
-            return exec_subshell(exec, ast);
+            ret = exec_subshell(exec, ast);
+            break;
         case AST_FUNCTION_DEFINITION:
-            return exec_function_definition(exec, ast);
+            ret = exec_function_definition(exec, ast);
+            break;
         case AST_IO_REDIRECT:
-            return EXEC_SUCCESS;
+            ret = EXEC_SUCCESS;
+            break;
         case AST_EXPANSION:
             // Expansions are handled in expand_string during AST_SIMPLE_COMMAND
-            return EXEC_SUCCESS;
+            ret = EXEC_SUCCESS;
+            break;
         default:
             executor_set_status(exec, 1);
-            return EXEC_FAILURE;
+            ret =  EXEC_FAILURE;
+            break;
     }
+    
+    // errexit: Exit on non-zero status, skip in conditionals
+    if (exec->errexit && exec->last_status != 0 && !is_conditional &&
+        ret != EXEC_RETURN && ret != EXEC_BREAK && ret != EXEC_CONTINUE) {
+        if (!exec->is_interactive) {
+            exit(exec->last_status);
+        }
+    }
+
+    return ret;
 }
