@@ -1,8 +1,8 @@
-#include "variables.h"
+#include "_variables.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
+#include "ptr_array.h"
 
 // Create a new Variable
 static Variable *variable_create(const char *name, const char *value) {
@@ -40,8 +40,8 @@ static void string_free(void *s) {
 
 // Find variable by name, return index or -1 if not found
 static int find_variable_index(PtrArray *vars, const char *name) {
-    for (int i = 0; i < vars->len; i++) {
-        Variable *var = vars->data[i];
+    for (int i = 0; i < ptr_array_size(vars); i++) {
+        Variable *var = (Variable *) ptr_array_get(vars, i);
         if (strcmp(string_data(var->name), name) == 0) {
             return i;
         }
@@ -69,7 +69,7 @@ VariableStore *variable_store_create(const char *shell_name) {
     store->variables = ptr_array_create();
     store->positional_params = ptr_array_create();
     if (!store->variables || !store->positional_params) {
-        ptr_array_destroy(store->variables, (FreeFunc)variable_free);
+        ptr_array_destroy(store->variables, (PtrArrayFreeFunc)variable_free);
         ptr_array_destroy(store->positional_params, string_free);
         free(store);
         return NULL;
@@ -79,7 +79,7 @@ VariableStore *variable_store_create(const char *shell_name) {
     store->pid = getpid();
     store->shell_name = shell_name ? strdup(shell_name) : strdup("myshell");
     if (!store->shell_name) {
-        ptr_array_destroy(store->variables, (FreeFunc)variable_free);
+        ptr_array_destroy(store->variables, (PtrArrayFreeFunc)variable_free);
         ptr_array_destroy(store->positional_params, string_free);
         free(store);
         return NULL;
@@ -92,7 +92,7 @@ VariableStore *variable_store_create(const char *shell_name) {
 // Destroy VariableStore
 void variable_store_destroy(VariableStore *self) {
     if (!self) return;
-    ptr_array_destroy(self->variables, (FreeFunc)variable_free);
+    ptr_array_destroy(self->variables, (PtrArrayFreeFunc)variable_free);
     ptr_array_destroy(self->positional_params, string_free);
     free(self->shell_name);
     free(self);
@@ -109,7 +109,7 @@ void variable_store_set_variable(VariableStore *self, const char *name, const ch
 
     int idx = find_variable_index(self->variables, name);
     if (idx >= 0) {
-        Variable *var = self->variables->data[idx];
+        Variable *var = ptr_array_get(self->variables, idx);;
         if (var->read_only) {
             fprintf(stderr, "Variable %s is read-only\n", name);
             return;
@@ -137,7 +137,7 @@ void variable_store_export_variable(VariableStore *self, const char *name) {
 
     int idx = find_variable_index(self->variables, name);
     if (idx >= 0) {
-        Variable *var = self->variables->data[idx];
+        Variable *var = (Variable *) ptr_array_get(self->variables, idx);
         var->exported = true;
     } else {
         Variable *var = variable_create(name, "");
@@ -161,12 +161,12 @@ void variable_store_unset_variable(VariableStore *self, const char *name) {
 
     int idx = find_variable_index(self->variables, name);
     if (idx >= 0) {
-        Variable *var = self->variables->data[idx];
+        Variable *var = (Variable *) ptr_array_get(self->variables, idx);
         if (var->read_only) {
             fprintf(stderr, "Variable %s is read-only\n", name);
             return;
         }
-        ptr_array_remove(self->variables, idx, (FreeFunc)variable_free);
+        ptr_array_remove(self->variables, idx, (PtrArrayFreeFunc)variable_free);
     }
 }
 
@@ -180,7 +180,7 @@ const char *variable_store_get_variable(VariableStore *self, const char *name) {
     }
     if (strcmp(name, "#") == 0) {
         static char num[16];
-        snprintf(num, sizeof(num), "%d", self->positional_params->len);
+        snprintf(num, sizeof(num), "%d", ptr_array_size(self->positional_params));
         return num;
     }
     if (strcmp(name, "$") == 0) {
@@ -198,12 +198,12 @@ const char *variable_store_get_variable(VariableStore *self, const char *name) {
         return self->shell_name;
     }
     if (strcmp(name, "@") == 0 || strcmp(name, "*") == 0) {
-        if (self->positional_params->len == 0) return "";
+        if (ptr_array_is_empty(self->positional_params)) return "";
         String *result = string_create(256);
         if (!result) return "";
-        for (int i = 0; i < self->positional_params->len; i++) {
+        for (int i = 0; i < ptr_array_size (self->positional_params); i++) {
             if (i > 0) string_append_char(result, ' ');
-            string_append_zstring(result, string_data(self->positional_params->data[i]));
+            string_append_zstring(result, string_data(ptr_array_get(self->positional_params, i)));
         }
         const char *value = string_data(result);
         string_destroy(result);
@@ -216,8 +216,8 @@ const char *variable_store_get_variable(VariableStore *self, const char *name) {
     // Positional parameters ($1, $2, ...)
     if (isdigit(name[0]) && name[0] != '0') {
         int idx = atoi(name) - 1;
-        if (idx >= 0 && idx < self->positional_params->len) {
-            return string_data(self->positional_params->data[idx]);
+        if (idx >= 0 && idx < ptr_array_size(self->positional_params)) {
+            return string_data(ptr_array_get(self->positional_params, idx));
         }
         return "";
     }
@@ -225,7 +225,7 @@ const char *variable_store_get_variable(VariableStore *self, const char *name) {
     // Regular variables
     int idx = find_variable_index(self->variables, name);
     if (idx >= 0) {
-        Variable *var = self->variables->data[idx];
+        Variable *var = ptr_array_get(self->variables, idx);
         return string_data(var->value);
     }
     return "";
@@ -242,7 +242,7 @@ void variable_store_make_readonly(VariableStore *self, const char *name) {
 
     int idx = find_variable_index(self->variables, name);
     if (idx >= 0) {
-        Variable *var = self->variables->data[idx];
+        Variable *var = ptr_array_get(self->variables, idx);
         var->read_only = true;
     } else {
         Variable *var = variable_create(name, "");
@@ -271,13 +271,13 @@ void variable_store_dump_variables(VariableStore *self) {
     printf("  @=%s\n", variable_store_get_variable(self, "@"));
     printf("  *=%s\n", variable_store_get_variable(self, "*"));
     printf("  -=%s\n", variable_store_get_variable(self, "-"));
-    for (int i = 0; i < self->positional_params->len; i++) {
-        printf("  %d=%s\n", i + 1, string_data(self->positional_params->data[i]));
+    for (int i = 0; i < ptr_array_size (self->positional_params); i++) {
+        printf("  %d=%s\n", i + 1, string_data(ptr_array_get(self->positional_params, i)));
     }
 
     printf("Regular Variables:\n");
-    for (int i = 0; i < self->variables->len; i++) {
-        Variable *var = self->variables->data[i];
+    for (int i = 0; i < ptr_array_size (self->variables); i++) {
+        Variable *var = ptr_array_get(self->variables, i);
         printf("  %s=%s [exported=%d, read_only=%d]\n",
                string_data(var->name),
                string_data(var->value),
@@ -305,7 +305,7 @@ void variable_store_set_positional_params(VariableStore *self, int argc, char **
 }
 
 // Set background PID
-void variable_store_set_background_pid(VariableStore *self, pid_t pid) {
+void variable_store_set_background_pid(VariableStore *self, long pid) {
     if (!self) return;
     self->last_bg_pid = pid;
 }
