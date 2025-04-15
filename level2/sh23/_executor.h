@@ -7,6 +7,7 @@
 #include "function_store.h"
 #include "trap_store.h"
 #include "builtins.h"
+#include "arithmetic.h"
 
 typedef struct {
     VariableStore *vars;      // Variable storage

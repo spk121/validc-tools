@@ -5,6 +5,7 @@
 #include <sys/wait.h>
 #include <string.h>
 #include <errno.h>
+#include <pwd.h>
 #include "executor.h"
 #include "string.h"
 
@@ -136,13 +137,35 @@ static char *expand_string(Executor *exec, char *input, Expansion **expansions, 
         Expansion *exp = expansions[i];
         switch (exp->type) {
             case EXPANSION_PARAMETER: {
-                const char *value = variable_store_get_variable(exec->vars, exp->data.parameter.name);
-                if (value) string_append_zstring(result, value);
+                int index = atoi(exp->data.parameter.name);
+                if (index >= 1 && index <= exec->vars->positional_params->len) {
+                    string_append_zstring(result, (char *)exec->vars->positional_params->data[index - 1]);
+                }
                 break;
             }
             case EXPANSION_SPECIAL: {
                 char buf[32];
                 switch (exp->data.special.param) {
+                    case SPECIAL_STAR:
+                        for (int j = 0; j < exec->vars->positional_params->len; j++) {
+                            string_append_zstring(result, (char *)exec->vars->positional_params->data[j]);
+                            if (j < exec->vars->positional_params->len - 1) {
+                                string_append_zstring(result, " ");
+                            }
+                        }
+                        break;
+                    case SPECIAL_AT:
+                        for (int j = 0; j < exec->vars->positional_params->len; j++) {
+                            string_append_zstring(result, (char *)exec->vars->positional_params->data[j]);
+                            if (j < exec->vars->positional_params->len - 1) {
+                                string_append_zstring(result, " ");
+                            }
+                        }
+                        break;
+                    case SPECIAL_HASH:
+                        snprintf(buf, sizeof(buf), "%d", exec->vars->positional_params->len);
+                        string_append_zstring(result, buf);
+                        break;
                     case SPECIAL_QUESTION:
                         snprintf(buf, sizeof(buf), "%d", exec->last_status);
                         string_append_zstring(result, buf);
@@ -152,6 +175,16 @@ static char *expand_string(Executor *exec, char *input, Expansion **expansions, 
                             snprintf(buf, sizeof(buf), "%ld", (long)exec->last_bg_pid);
                             string_append_zstring(result, buf);
                         }
+                        break;
+                    case SPECIAL_HYPHEN:
+                        string_append_zstring(result, exec->vars->options);
+                        break;
+                    case SPECIAL_DOLLAR:
+                        snprintf(buf, sizeof(buf), "%ld", exec->vars->pid);
+                        string_append_zstring(result, buf);
+                        break;
+                    case SPECIAL_ZERO:
+                        string_append_zstring(result, exec->vars->shell_name);
                         break;
                     default:
                         break;
@@ -164,7 +197,6 @@ static char *expand_string(Executor *exec, char *input, Expansion **expansions, 
                     fprintf(stderr, "command substitution: pipe failed: %s\n", strerror(errno));
                     break;
                 }
-
                 pid_t pid = fork();
                 if (pid == -1) {
                     fprintf(stderr, "command substitution: fork failed: %s\n", strerror(errno));
@@ -172,7 +204,6 @@ static char *expand_string(Executor *exec, char *input, Expansion **expansions, 
                     close(pipefd[1]);
                     break;
                 }
-
                 if (pid == 0) {
                     close(pipefd[0]);
                     if (dup2(pipefd[1], STDOUT_FILENO) == -1) {
@@ -183,7 +214,6 @@ static char *expand_string(Executor *exec, char *input, Expansion **expansions, 
                     ExecStatus ret = executor_run(exec, exp->data.command.command);
                     exit(ret == EXEC_SUCCESS || ret == EXEC_RETURN ? exec->last_status : 1);
                 }
-
                 close(pipefd[1]);
                 String *output = string_create();
                 char buf[1024];
@@ -192,13 +222,149 @@ static char *expand_string(Executor *exec, char *input, Expansion **expansions, 
                     string_append_buffer(output, buf, n);
                 }
                 close(pipefd[0]);
-
                 int status;
                 waitpid(pid, &status, 0);
-
                 trim_trailing_newlines(output);
                 string_append_string(result, output);
                 string_destroy(output);
+                break;
+            }
+            case EXPANSION_DEFAULT: {
+                const char *value = variable_store_default_value(
+                    exec->vars,
+                    exp->data.default_exp.var,
+                    exp->data.default_exp.default_value
+                );
+                if (value) {
+                    string_append_zstring(result, value);
+                    free((void *)value);
+                }
+                break;
+            }
+            case EXPANSION_ASSIGN: {
+                const char *value = variable_store_assign_default(
+                    exec->vars,
+                    exp->data.default_exp.var,
+                    exp->data.default_exp.default_value
+                );
+                if (value) {
+                    string_append_zstring(result, value);
+                    free((void *)value);
+                }
+                break;
+            }
+            case EXPANSION_ERROR_IF_UNSET: {
+                const char *value = variable_store_indicate_error(
+                    exec->vars,
+                    exp->data.default_exp.var,
+                    exp->data.default_exp.default_value
+                );
+                if (value) {
+                    string_append_zstring(result, value);
+                    free((void *)value);
+                } else {
+                    executor_set_status(exec, 1);
+                    if (!exec->is_interactive) exit(1);
+                }
+                break;
+            }
+            case EXPANSION_ALTERNATIVE: {
+                const char *value = variable_store_alternative_value(
+                    exec->vars,
+                    exp->data.default_exp.var,
+                    exp->data.default_exp.default_value
+                );
+                if (value) {
+                    string_append_zstring(result, value);
+                    free((void *)value);
+                }
+                break;
+            }
+            case EXPANSION_LENGTH: {
+                size_t len = variable_store_length(exec->vars, exp->data.length.var);
+                char buf[32];
+                snprintf(buf, sizeof(buf), "%zu", len);
+                string_append_zstring(result, buf);
+                break;
+            }
+            case EXPANSION_PREFIX_SHORT: {
+                const char *value = variable_store_remove_prefix(
+                    exec->vars,
+                    exp->data.pattern.var,
+                    exp->data.pattern.pattern,
+                    false
+                );
+                if (value) {
+                    string_append_zstring(result, value);
+                    free((void *)value);
+                }
+                break;
+            }
+            case EXPANSION_PREFIX_LONG: {
+                const char *value = variable_store_remove_prefix(
+                    exec->vars,
+                    exp->data.pattern.var,
+                    exp->data.pattern.pattern,
+                    true
+                );
+                if (value) {
+                    string_append_zstring(result, value);
+                    free((void *)value);
+                }
+                break;
+            }
+            case EXPANSION_SUFFIX_SHORT: {
+                const char *value = variable_store_remove_suffix(
+                    exec->vars,
+                    exp->data.pattern.var,
+                    exp->data.pattern.pattern,
+                    false
+                );
+                if (value) {
+                    string_append_zstring(result, value);
+                    free((void *)value);
+                }
+                break;
+            }
+            case EXPANSION_SUFFIX_LONG: {
+                const char *value = variable_store_remove_suffix(
+                    exec->vars,
+                    exp->data.pattern.var,
+                    exp->data.pattern.pattern,
+                    true
+                );
+                if (value) {
+                    string_append_zstring(result, value);
+                    free((void *)value);
+                }
+                break;
+            }
+            case EXPANSION_ARITHMETIC: {
+                ArithmeticResult arith = arithmetic_evaluate(exec, exp->data.arithmetic.expression);
+                if (arith.failed) {
+                    fprintf(stderr, "arithmetic: %s\n", arith.error);
+                    executor_set_status(exec, 1);
+                    arithmetic_result_free(&arith);
+                    break;
+                }
+                char buf[32];
+                snprintf(buf, sizeof(buf), "%ld", arith.value);
+                string_append_zstring(result, buf);
+                arithmetic_result_free(&arith);
+                break;
+            }
+            case EXPANSION_TILDE: {
+                if (!exp->data.tilde.user || strcmp(exp->data.tilde.user, "") == 0) {
+                    const char *home = variable_store_get_variable(exec->vars, "HOME");
+                    if (home) {
+                        string_append_zstring(result, home);
+                    }
+                } else {
+                    struct passwd *pw = getpwnam(exp->data.tilde.user);
+                    if (pw) {
+                        string_append_zstring(result, pw->pw_dir);
+                    }
+                }
                 break;
             }
             default:
@@ -545,7 +711,7 @@ static ExecStatus exec_until_clause(Executor *exec, ASTNode *ast) {
             exec->continue_count--;
             continue;
         }
-        ExecStatus cond_status = executor_run(exec, ast->data.until_clause.condition);
+        ExecStatus cond_status = executor_run(exec, ast->data.while_clause.condition);
         if (cond_status == EXEC_RETURN) {
             exec->loop_depth--;
             return cond_status;
@@ -555,7 +721,7 @@ static ExecStatus exec_until_clause(Executor *exec, ASTNode *ast) {
             return cond_status;
         }
         if (executor_get_status(exec) == 0) break;
-        ExecStatus body_status = executor_run(exec, ast->data.until_clause.body);
+        ExecStatus body_status = executor_run(exec, ast->data.while_clause.body);
         if (body_status == EXEC_RETURN) {
             exec->loop_depth--;
             return body_status;
@@ -574,8 +740,8 @@ static ExecStatus exec_until_clause(Executor *exec, ASTNode *ast) {
         }
     }
     exec->loop_depth--;
-    if (ast->data.until_clause.next) {
-        return executor_run(exec, ast->data.until_clause.next);
+    if (ast->data.while_clause.next) {
+        return executor_run(exec, ast->data.while_clause.next);
     }
     return EXEC_SUCCESS;
 }
@@ -678,6 +844,7 @@ ExecStatus executor_run(Executor *exec, ASTNode *ast) {
         case AST_IO_REDIRECT:
             return EXEC_SUCCESS;
         case AST_EXPANSION:
+            // Expansions are handled in expand_string during AST_SIMPLE_COMMAND
             return EXEC_SUCCESS;
         default:
             executor_set_status(exec, 1);
