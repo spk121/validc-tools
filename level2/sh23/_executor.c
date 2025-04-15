@@ -34,6 +34,7 @@ Executor *executor_create(VariableStore *vars, Tokenizer *tokenizer, AliasStore 
     exec->function_name = NULL;
     exec->loop_depth = 0;
     exec->function_depth = 0;
+    exec->is_interactive = true;
     trap_store_set_executor(exec);
     return exec;
 }
@@ -397,6 +398,244 @@ static int match_pattern(const char *word, const char *pattern) {
     return (*word == 0 && *pattern == 0) || (*pattern == '*' && *(pattern + 1) == 0);
 }
 
+// Execute AND_OR node
+static ExecStatus exec_and_or(Executor *exec, ASTNode *ast) {
+    ExecStatus left = executor_run(exec, ast->data.and_or.left);
+    if (left == EXEC_RETURN) return left;
+    if (left != EXEC_SUCCESS) return left;
+    int status = executor_get_status(exec);
+    if ((ast->data.and_or.operation == TOKEN_AND_IF && status == 0) ||
+        (ast->data.and_or.operation == TOKEN_OR_IF && status != 0)) {
+        return executor_run(exec, ast->data.and_or.right);
+    }
+    return EXEC_SUCCESS;
+}
+
+// Execute LIST node
+static ExecStatus exec_list(Executor *exec, ASTNode *ast) {
+    ExecStatus ret = executor_run(exec, ast->data.list.and_or);
+    if (ret == EXEC_RETURN) return ret;
+    if (ret != EXEC_SUCCESS) return ret;
+    if (ast->data.list.next && ast->data.list.separator != TOKEN_AMP) {
+        return executor_run(exec, ast->data.list.next);
+    }
+    return EXEC_SUCCESS;
+}
+
+// Execute IF_CLAUSE node
+static ExecStatus exec_if_clause(Executor *exec, ASTNode *ast) {
+    ExecStatus cond_status = executor_run(exec, ast->data.if_clause.condition);
+    if (cond_status == EXEC_RETURN) return cond_status;
+    if (cond_status != EXEC_SUCCESS) return cond_status;
+    if (executor_get_status(exec) == 0) {
+        ExecStatus then_status = executor_run(exec, ast->data.if_clause.then_body);
+        if (then_status == EXEC_RETURN) return then_status;
+        if (then_status != EXEC_SUCCESS) return then_status;
+    } else if (ast->data.if_clause.else_part) {
+        ExecStatus else_status = executor_run(exec, ast->data.if_clause.else_part);
+        if (else_status == EXEC_RETURN) return else_status;
+        if (else_status != EXEC_SUCCESS) return else_status;
+    }
+    if (ast->data.if_clause.next) {
+        return executor_run(exec, ast->data.if_clause.next);
+    }
+    return EXEC_SUCCESS;
+}
+
+// Execute FOR_CLAUSE node
+static ExecStatus exec_for_clause(Executor *exec, ASTNode *ast) {
+    exec->loop_depth++;
+    char **words = ast->data.for_clause.wordlist;
+    int count = ast->data.for_clause.wordlist_count;
+    if (count == 0) {
+        words = (char **)exec->vars->positional_params->data;
+        count = exec->vars->positional_params->len;
+    }
+    for (int i = 0; i < count; i++) {
+        if (exec->break_count > 0) {
+            exec->break_count--;
+            break;
+        }
+        if (exec->continue_count > 0) {
+            exec->continue_count--;
+            continue;
+        }
+        variable_store_set_variable(exec->vars, ast->data.for_clause.variable, words[i]);
+        ExecStatus body_status = executor_run(exec, ast->data.for_clause.body);
+        if (body_status == EXEC_RETURN) {
+            exec->loop_depth--;
+            return body_status;
+        }
+        if (body_status == EXEC_BREAK) {
+            exec->break_count--;
+            break;
+        }
+        if (body_status == EXEC_CONTINUE) {
+            exec->continue_count--;
+            continue;
+        }
+        if (body_status != EXEC_SUCCESS) {
+            exec->loop_depth--;
+            return body_status;
+        }
+    }
+    exec->loop_depth--;
+    if (ast->data.for_clause.next) {
+        return executor_run(exec, ast->data.for_clause.next);
+    }
+    return EXEC_SUCCESS;
+}
+
+// Execute WHILE_CLAUSE node
+static ExecStatus exec_while_clause(Executor *exec, ASTNode *ast) {
+    exec->loop_depth++;
+    while (1) {
+        if (exec->break_count > 0) {
+            exec->break_count--;
+            break;
+        }
+        if (exec->continue_count > 0) {
+            exec->continue_count--;
+            continue;
+        }
+        ExecStatus cond_status = executor_run(exec, ast->data.while_clause.condition);
+        if (cond_status == EXEC_RETURN) {
+            exec->loop_depth--;
+            return cond_status;
+        }
+        if (cond_status != EXEC_SUCCESS) {
+            exec->loop_depth--;
+            return cond_status;
+        }
+        if (executor_get_status(exec) != 0) break;
+        ExecStatus body_status = executor_run(exec, ast->data.while_clause.body);
+        if (body_status == EXEC_RETURN) {
+            exec->loop_depth--;
+            return body_status;
+        }
+        if (body_status == EXEC_BREAK) {
+            exec->break_count--;
+            break;
+        }
+        if (body_status == EXEC_CONTINUE) {
+            exec->continue_count--;
+            continue;
+        }
+        if (body_status != EXEC_SUCCESS) {
+            exec->loop_depth--;
+            return body_status;
+        }
+    }
+    exec->loop_depth--;
+    if (ast->data.while_clause.next) {
+        return executor_run(exec, ast->data.while_clause.next);
+    }
+    return EXEC_SUCCESS;
+}
+
+// Execute UNTIL_CLAUSE node
+static ExecStatus exec_until_clause(Executor *exec, ASTNode *ast) {
+    exec->loop_depth++;
+    while (1) {
+        if (exec->break_count > 0) {
+            exec->break_count--;
+            break;
+        }
+        if (exec->continue_count > 0) {
+            exec->continue_count--;
+            continue;
+        }
+        ExecStatus cond_status = executor_run(exec, ast->data.until_clause.condition);
+        if (cond_status == EXEC_RETURN) {
+            exec->loop_depth--;
+            return cond_status;
+        }
+        if (cond_status != EXEC_SUCCESS) {
+            exec->loop_depth--;
+            return cond_status;
+        }
+        if (executor_get_status(exec) == 0) break;
+        ExecStatus body_status = executor_run(exec, ast->data.until_clause.body);
+        if (body_status == EXEC_RETURN) {
+            exec->loop_depth--;
+            return body_status;
+        }
+        if (body_status == EXEC_BREAK) {
+            exec->break_count--;
+            break;
+        }
+        if (body_status == EXEC_CONTINUE) {
+            exec->continue_count--;
+            continue;
+        }
+        if (body_status != EXEC_SUCCESS) {
+            exec->loop_depth--;
+            return body_status;
+        }
+    }
+    exec->loop_depth--;
+    if (ast->data.until_clause.next) {
+        return executor_run(exec, ast->data.until_clause.next);
+    }
+    return EXEC_SUCCESS;
+}
+
+// Execute CASE_CLAUSE node
+static ExecStatus exec_case_clause(Executor *exec, ASTNode *ast) {
+    char *word = ast->data.case_clause.word;
+    CaseItem *item = ast->data.case_clause.items;
+    int matched = 0;
+    while (item && !matched) {
+        for (int i = 0; i < item->pattern_count; i++) {
+            if (match_pattern(word, item->patterns[i])) {
+                ExecStatus action_status = executor_run(exec, item->action);
+                if (action_status == EXEC_RETURN) return action_status;
+                if (action_status != EXEC_SUCCESS) return action_status;
+                matched = 1;
+                break;
+            }
+        }
+        if (item->has_dsemi) break;
+        item = item->next;
+    }
+    if (ast->data.case_clause.next) {
+        return executor_run(exec, ast->data.case_clause.next);
+    }
+    return EXEC_SUCCESS;
+}
+
+// Execute SUBSHELL node
+static ExecStatus exec_subshell(Executor *exec, ASTNode *ast) {
+    pid_t pid = fork();
+    if (pid == -1) {
+        executor_set_status(exec, 1);
+        return EXEC_FAILURE;
+    }
+    if (pid == 0) {
+        exec->in_subshell = 1;
+        ExecStatus ret = executor_run(exec, ast->data.subshell.body);
+        exit(ret == EXEC_SUCCESS || ret == EXEC_RETURN ? executor_get_status(exec) : 1);
+    }
+    int status;
+    waitpid(pid, &status, 0);
+    executor_set_status(exec, WIFEXITED(status) ? WEXITSTATUS(status) : 1);
+    return EXEC_SUCCESS;
+}
+
+// Execute FUNCTION_DEFINITION node
+static ExecStatus exec_function_definition(Executor *exec, ASTNode *ast) {
+    int ret = function_store_set(exec->func_store, ast->data.function_definition.name, ast->data.function_definition.body);
+    if (ret != 0) {
+        executor_set_status(exec, 1);
+    } else {
+        executor_set_status(exec, 0);
+    }
+    if (ast->data.function_definition.next) {
+        return executor_run(exec, ast->data.function_definition.next);
+    }
+    return EXEC_SUCCESS;
+}
+
 // Execute AST node
 ExecStatus executor_run(Executor *exec, ASTNode *ast) {
     if (!ast) {
@@ -409,254 +648,33 @@ ExecStatus executor_run(Executor *exec, ASTNode *ast) {
             return exec_simple_command(exec, ast);
         case AST_PIPELINE:
             return exec_pipeline(exec, ast);
-        case AST_AND_OR: {
-            ExecStatus left = executor_run(exec, ast->data.and_or.left);
-            if (left == EXEC_RETURN) return left;
-            if (left != EXEC_SUCCESS) return left;
-            int status = executor_get_status(exec);
-            if ((ast->data.and_or.operation == TOKEN_AND_IF && status == 0) ||
-                (ast->data.and_or.operation == TOKEN_OR_IF && status != 0)) {
-                return executor_run(exec, ast->data.and_or.right);
-            }
-            return EXEC_SUCCESS;
-        }
-        case AST_LIST: {
-            ExecStatus ret = executor_run(exec, ast->data.list.and_or);
-            if (ret == EXEC_RETURN) return ret;
-            if (ret != EXEC_SUCCESS) return ret;
-            if (ast->data.list.next && ast->data.list.separator != TOKEN_AMP) {
-                return executor_run(exec, ast->data.list.next);
-            }
-            return EXEC_SUCCESS;
-        }
+        case AST_AND_OR:
+            return exec_and_or(exec, ast);
+        case AST_LIST:
+            return exec_list(exec, ast);
         case AST_COMPLETE_COMMAND:
             return executor_run(exec, ast->data.complete_command.list);
         case AST_PROGRAM:
             return executor_run(exec, ast->data.program.commands);
-        case AST_IF_CLAUSE: {
-            ExecStatus cond_status = executor_run(exec, ast->data.if_clause.condition);
-            if (cond_status == EXEC_RETURN) return cond_status;
-            if (cond_status != EXEC_SUCCESS) return cond_status;
-
-            if (executor_get_status(exec) == 0) {
-                ExecStatus then_status = executor_run(exec, ast->data.if_clause.then_body);
-                if (then_status == EXEC_RETURN) return then_status;
-                if (then_status != EXEC_SUCCESS) return then_status;
-            } else if (ast->data.if_clause.else_part) {
-                ExecStatus else_status = executor_run(exec, ast->data.if_clause.else_part);
-                if (else_status == EXEC_RETURN) return else_status;
-                if (else_status != EXEC_SUCCESS) return else_status;
-            }
-
-            if (ast->data.if_clause.next) {
-                return executor_run(exec, ast->data.if_clause.next);
-            }
-            return EXEC_SUCCESS;
-        }
-        case AST_FOR_CLAUSE: {
-            exec->loop_depth++;
-            char **words = ast->data.for_clause.wordlist;
-            int count = ast->data.for_clause.wordlist_count;
-            if (count == 0) {
-                words = (char **)exec->vars->positional_params->data;
-                count = exec->vars->positional_params->len;
-            }
-
-            for (int i = 0; i < count; i++) {
-                if (exec->break_count > 0) {
-                    exec->break_count--;
-                    break;
-                }
-                if (exec->continue_count > 0) {
-                    exec->continue_count--;
-                    continue;
-                }
-
-                variable_store_set_variable(exec->vars, ast->data.for_clause.variable, words[i]);
-
-                ExecStatus body_status = executor_run(exec, ast->data.for_clause.body);
-                if (body_status == EXEC_RETURN) {
-                    exec->loop_depth--;
-                    return body_status;
-                }
-                if (body_status == EXEC_BREAK) {
-                    exec->break_count--;
-                    break;
-                }
-                if (body_status == EXEC_CONTINUE) {
-                    exec->continue_count--;
-                    continue;
-                }
-                if (body_status != EXEC_SUCCESS) {
-                    exec->loop_depth--;
-                    return body_status;
-                }
-            }
-
-            exec->loop_depth--;
-
-            if (ast->data.for_clause.next) {
-                return executor_run(exec, ast->data.for_clause.next);
-            }
-            return EXEC_SUCCESS;
-        }
-        case AST_WHILE_CLAUSE: {
-            exec->loop_depth++;
-            while (1) {
-                if (exec->break_count > 0) {
-                    exec->break_count--;
-                    break;
-                }
-                if (exec->continue_count > 0) {
-                    exec->continue_count--;
-                    continue;
-                }
-
-                ExecStatus cond_status = executor_run(exec, ast->data.while_clause.condition);
-                if (cond_status == EXEC_RETURN) {
-                    exec->loop_depth--;
-                    return cond_status;
-                }
-                if (cond_status != EXEC_SUCCESS) {
-                    exec->loop_depth--;
-                    return cond_status;
-                }
-
-                if (executor_get_status(exec) != 0) break;
-
-                ExecStatus body_status = executor_run(exec, ast->data.while_clause.body);
-                if (body_status == EXEC_RETURN) {
-                    exec->loop_depth--;
-                    return body_status;
-                }
-                if (body_status == EXEC_BREAK) {
-                    exec->break_count--;
-                    break;
-                }
-                if (body_status == EXEC_CONTINUE) {
-                    exec->continue_count--;
-                    continue;
-                }
-                if (body_status != EXEC_SUCCESS) {
-                    exec->loop_depth--;
-                    return body_status;
-                }
-            }
-
-            exec->loop_depth--;
-
-            if (ast->data.while_clause.next) {
-                return executor_run(exec, ast->data.while_clause.next);
-            }
-            return EXEC_SUCCESS;
-        }
-        case AST_UNTIL_CLAUSE: {
-            exec->loop_depth++;
-            while (1) {
-                if (exec->break_count > 0) {
-                    exec->break_count--;
-                    break;
-                }
-                if (exec->continue_count > 0) {
-                    exec->continue_count--;
-                    continue;
-                }
-
-                ExecStatus cond_status = executor_run(exec, ast->data.until_clause.condition);
-                if (cond_status == EXEC_RETURN) {
-                    exec->loop_depth--;
-                    return cond_status;
-                }
-                if (cond_status != EXEC_SUCCESS) {
-                    exec->loop_depth--;
-                    return cond_status;
-                }
-
-                if (executor_get_status(exec) == 0) break;
-
-                ExecStatus body_status = executor_run(exec, ast->data.until_clause.body);
-                if (body_status == EXEC_RETURN) {
-                    exec->loop_depth--;
-                    return body_status;
-                }
-                if (body_status == EXEC_BREAK) {
-                    exec->break_count--;
-                    break;
-                }
-                if (body_status == EXEC_CONTINUE) {
-                    exec->continue_count--;
-                    continue;
-                }
-                if (body_status != EXEC_SUCCESS) {
-                    exec->loop_depth--;
-                    return body_status;
-                }
-            }
-
-            exec->loop_depth--;
-
-            if (ast->data.until_clause.next) {
-                return executor_run(exec, ast->data.until_clause.next);
-            }
-            return EXEC_SUCCESS;
-        }
-        case AST_CASE_CLAUSE: {
-            char *word = ast->data.case_clause.word;
-
-            CaseItem *item = ast->data.case_clause.items;
-            int matched = 0;
-            while (item && !matched) {
-                for (int i = 0; i < item->pattern_count; i++) {
-                    if (match_pattern(word, item->patterns[i])) {
-                        ExecStatus action_status = executor_run(exec, item->action);
-                        if (action_status == EXEC_RETURN) return action_status;
-                        if (action_status != EXEC_SUCCESS) return action_status;
-                        matched = 1;
-                        break;
-                    }
-                }
-                if (item->has_dsemi) break;
-                item = item->next;
-            }
-
-            if (ast->data.case_clause.next) {
-                return executor_run(exec, ast->data.case_clause.next);
-            }
-            return EXEC_SUCCESS;
-        }
+        case AST_IF_CLAUSE:
+            return exec_if_clause(exec, ast);
+        case AST_FOR_CLAUSE:
+            return exec_for_clause(exec, ast);
+        case AST_WHILE_CLAUSE:
+            return exec_while_clause(exec, ast);
+        case AST_UNTIL_CLAUSE:
+            return exec_until_clause(exec, ast);
+        case AST_CASE_CLAUSE:
+            return exec_case_clause(exec, ast);
         case AST_BRACE_GROUP: {
             ExecStatus ret = executor_run(exec, ast->data.brace_group.body);
             if (ret == EXEC_RETURN) return ret;
             return ret;
         }
-        case AST_SUBSHELL: {
-            pid_t pid = fork();
-            if (pid == -1) {
-                executor_set_status(exec, 1);
-                return EXEC_FAILURE;
-            }
-            if (pid == 0) {
-                exec->in_subshell = 1;
-                ExecStatus ret = executor_run(exec, ast->data.subshell.body);
-                exit(ret == EXEC_SUCCESS || ret == EXEC_RETURN ? executor_get_status(exec) : 1);
-            }
-            int status;
-            waitpid(pid, &status, 0);
-            executor_set_status(exec, WIFEXITED(status) ? WEXITSTATUS(status) : 1);
-            return EXEC_SUCCESS;
-        }
-        case AST_FUNCTION_DEFINITION: {
-            int ret = function_store_set(exec->func_store, ast->data.function_definition.name, ast->data.function_definition.body);
-            if (ret != 0) {
-                executor_set_status(exec, 1);
-            } else {
-                executor_set_status(exec, 0);
-            }
-            if (ast->data.function_definition.next) {
-                return executor_run(exec, ast->data.function_definition.next);
-            }
-            return EXEC_SUCCESS;
-        }
+        case AST_SUBSHELL:
+            return exec_subshell(exec, ast);
+        case AST_FUNCTION_DEFINITION:
+            return exec_function_definition(exec, ast);
         case AST_IO_REDIRECT:
             return EXEC_SUCCESS;
         case AST_EXPANSION:

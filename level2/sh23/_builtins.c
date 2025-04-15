@@ -11,6 +11,20 @@
 #include "tokenizer.h"
 #include "parser.h"
 
+bool is_special_builtin(const char *name) {
+    const char *special_builtins[] = {
+        ":", ".", "eval", "exec", "exit", "export", "readonly",
+        "set", "shift", "times", "trap", "unset", "break", "continue", "return",
+        NULL
+    };
+    for (int i = 0; special_builtins[i]; i++) {
+        if (strcmp(name, special_builtins[i]) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
 static int get_signal_number(const char *sig) {
     if (strcmp(sig, "HUP") == 0) return SIGHUP;
     if (strcmp(sig, "INT") == 0) return SIGINT;
@@ -34,12 +48,14 @@ static ExecStatus builtin_dot(Executor *exec, char **argv, int argc) {
     if (argc < 2) {
         fprintf(stderr, ".: filename argument required\n");
         executor_set_status(exec, 2);
+        if (!exec->is_interactive) exit(2); // Exit in non-interactive mode
         return EXEC_FAILURE;
     }
     FILE *fp = fopen(argv[1], "r");
     if (!fp) {
         fprintf(stderr, ".: %s: %s\n", argv[1], strerror(errno));
         executor_set_status(exec, 1);
+        if (!exec->is_interactive) exit(1); // Exit in non-interactive mode
         return EXEC_FAILURE;
     }
     String *script = string_create();
@@ -57,6 +73,7 @@ static ExecStatus builtin_dot(Executor *exec, char **argv, int argc) {
         tokenizer_destroy(tokenizer);
         string_destroy(script);
         executor_set_status(exec, 1);
+        if (!exec->is_interactive) exit(1); // Exit in non-interactive mode
         return EXEC_FAILURE;
     }
     Parser *parser = parser_create(tokenizer, exec->alias_store);
@@ -68,6 +85,7 @@ static ExecStatus builtin_dot(Executor *exec, char **argv, int argc) {
         parser_destroy(parser);
         string_destroy(script);
         executor_set_status(exec, 1);
+        if (!exec->is_interactive) exit(1); // Exit in non-interactive mode
         return EXEC_FAILURE;
     }
     ExecStatus ret = executor_run(exec, ast);
@@ -89,6 +107,7 @@ static ExecStatus builtin_eval(Executor *exec, char **argv, int argc) {
         tokenizer_destroy(tokenizer);
         string_destroy(input);
         executor_set_status(exec, 1);
+        if (!exec->is_interactive) exit(1); // Exit in non-interactive mode
         return EXEC_FAILURE;
     }
     Parser *parser = parser_create(tokenizer, exec->alias_store);
@@ -99,6 +118,7 @@ static ExecStatus builtin_eval(Executor *exec, char **argv, int argc) {
         parser_destroy(parser);
         string_destroy(input);
         executor_set_status(exec, 1);
+        if (!exec->is_interactive) exit(1); // Exit in non-interactive mode
         return EXEC_FAILURE;
     }
     ExecStatus ret = executor_run(exec, ast);
@@ -115,6 +135,7 @@ static ExecStatus builtin_exec(Executor *exec, char **argv, int argc) {
     execvp(argv[1], &argv[1]);
     fprintf(stderr, "exec: %s: %s\n", argv[1], strerror(errno));
     executor_set_status(exec, 1);
+    if (!exec->is_interactive) exit(1); // Exit in non-interactive mode
     return EXEC_FAILURE;
 }
 
@@ -126,6 +147,7 @@ static ExecStatus builtin_exit(Executor *exec, char **argv, int argc) {
         if (*endptr != '\0') {
             fprintf(stderr, "exit: %s: numeric argument required\n", argv[1]);
             status = 2;
+            if (!exec->is_interactive) exit(2); // Exit in non-interactive mode
         } else {
             status = (int)n;
         }
@@ -133,6 +155,7 @@ static ExecStatus builtin_exit(Executor *exec, char **argv, int argc) {
     if (argc > 2) {
         fprintf(stderr, "exit: too many arguments\n");
         status = 2;
+        if (!exec->is_interactive) exit(2); // Exit in non-interactive mode
     }
     exit(status);
     return EXEC_SUCCESS; // Unreachable
@@ -152,6 +175,7 @@ static ExecStatus builtin_export(Executor *exec, char **argv, int argc) {
             if (!is_valid_name_zstring(argv[i])) {
                 fprintf(stderr, "export: %s: not a valid identifier\n", argv[i]);
                 status = 1;
+                *eq = '=';
                 continue;
             }
             variable_store_set_variable(exec->vars, argv[i], eq + 1);
@@ -167,6 +191,7 @@ static ExecStatus builtin_export(Executor *exec, char **argv, int argc) {
         }
     }
     executor_set_status(exec, status);
+    if (status != 0 && !exec->is_interactive) exit(status); // Exit in non-interactive mode
     return EXEC_SUCCESS;
 }
 
@@ -184,6 +209,7 @@ static ExecStatus builtin_readonly(Executor *exec, char **argv, int argc) {
             if (!is_valid_name_zstring(argv[i])) {
                 fprintf(stderr, "readonly: %s: not a valid identifier\n", argv[i]);
                 status = 1;
+                *eq = '=';
                 continue;
             }
             variable_store_set_variable(exec->vars, argv[i], eq + 1);
@@ -199,6 +225,7 @@ static ExecStatus builtin_readonly(Executor *exec, char **argv, int argc) {
         }
     }
     executor_set_status(exec, status);
+    if (status != 0 && !exec->is_interactive) exit(status); // Exit in non-interactive mode
     return EXEC_SUCCESS;
 }
 
@@ -224,6 +251,7 @@ static ExecStatus builtin_shift(Executor *exec, char **argv, int argc) {
         if (*endptr != '\0' || val < 0) {
             fprintf(stderr, "shift: %s: invalid number\n", argv[1]);
             executor_set_status(exec, 2);
+            if (!exec->is_interactive) exit(2); // Exit in non-interactive mode
             return EXEC_FAILURE;
         }
         n = (int)val;
@@ -231,11 +259,13 @@ static ExecStatus builtin_shift(Executor *exec, char **argv, int argc) {
     if (argc > 2) {
         fprintf(stderr, "shift: too many arguments\n");
         executor_set_status(exec, 2);
+        if (!exec->is_interactive) exit(2); // Exit in non-interactive mode
         return EXEC_FAILURE;
     }
     if (n > exec->vars->positional_params->len) {
         fprintf(stderr, "shift: shift count out of range\n");
         executor_set_status(exec, 1);
+        if (!exec->is_interactive) exit(1); // Exit in non-interactive mode
         return EXEC_FAILURE;
     }
     for (int i = 0; i < n; i++) {
@@ -252,6 +282,7 @@ static ExecStatus builtin_times(Executor *exec, char **argv, int argc) {
     if (argc > 1) {
         fprintf(stderr, "times: too many arguments\n");
         executor_set_status(exec, 2);
+        if (!exec->is_interactive) exit(2); // Exit in non-interactive mode
         return EXEC_FAILURE;
     }
     struct tms tms;
@@ -259,6 +290,7 @@ static ExecStatus builtin_times(Executor *exec, char **argv, int argc) {
     if (real == (clock_t)-1) {
         fprintf(stderr, "times: %s\n", strerror(errno));
         executor_set_status(exec, 1);
+        if (!exec->is_interactive) exit(1); // Exit in non-interactive mode
         return EXEC_FAILURE;
     }
     clock_t ticks_per_sec = sysconf(_SC_CLK_TCK);
@@ -281,6 +313,7 @@ static ExecStatus builtin_trap(Executor *exec, char **argv, int argc) {
     if (argc == 2) {
         fprintf(stderr, "trap: trap requires arguments\n");
         executor_set_status(exec, 2);
+        if (!exec->is_interactive) exit(2); // Exit in non-interactive mode
         return EXEC_FAILURE;
     }
     char *action = argv[1];
@@ -310,6 +343,7 @@ static ExecStatus builtin_trap(Executor *exec, char **argv, int argc) {
         }
     }
     executor_set_status(exec, status);
+    if (status != 0 && !exec->is_interactive) exit(status); // Exit in non-interactive mode
     return EXEC_SUCCESS;
 }
 
@@ -328,6 +362,7 @@ static ExecStatus builtin_unset(Executor *exec, char **argv, int argc) {
         } else {
             fprintf(stderr, "unset: %s: invalid option\n", argv[1]);
             executor_set_status(exec, 2);
+            if (!exec->is_interactive) exit(2); // Exit in non-interactive mode
             return EXEC_FAILURE;
         }
     }
@@ -358,6 +393,7 @@ static ExecStatus builtin_unset(Executor *exec, char **argv, int argc) {
         }
     }
     executor_set_status(exec, status);
+    if (status != 0 && !exec->is_interactive) exit(status); // Exit in non-interactive mode
     return EXEC_SUCCESS;
 }
 
@@ -365,6 +401,7 @@ static ExecStatus builtin_return(Executor *exec, char **argv, int argc) {
     if (exec->function_depth == 0) {
         fprintf(stderr, "return: can only be used in a function\n");
         executor_set_status(exec, 1);
+        if (!exec->is_interactive) exit(1); // Exit in non-interactive mode
         return EXEC_FAILURE;
     }
     int status = 0;
@@ -374,6 +411,7 @@ static ExecStatus builtin_return(Executor *exec, char **argv, int argc) {
         if (*endptr != '\0') {
             fprintf(stderr, "return: %s: numeric argument required\n", argv[1]);
             executor_set_status(exec, 1);
+            if (!exec->is_interactive) exit(1); // Exit in non-interactive mode
             return EXEC_FAILURE;
         }
         status = (int)n;
@@ -381,6 +419,7 @@ static ExecStatus builtin_return(Executor *exec, char **argv, int argc) {
     if (argc > 2) {
         fprintf(stderr, "return: too many arguments\n");
         executor_set_status(exec, 1);
+        if (!exec->is_interactive) exit(1); // Exit in non-interactive mode
         return EXEC_FAILURE;
     }
     executor_set_status(exec, status);
@@ -391,6 +430,7 @@ static ExecStatus builtin_break(Executor *exec, char **argv, int argc) {
     if (exec->loop_depth == 0) {
         fprintf(stderr, "break: only meaningful in a loop\n");
         executor_set_status(exec, 1);
+        if (!exec->is_interactive) exit(1); // Exit in non-interactive mode
         return EXEC_FAILURE;
     }
     int count = 1;
@@ -400,18 +440,21 @@ static ExecStatus builtin_break(Executor *exec, char **argv, int argc) {
         if (*endptr != '\0' || n <= 0) {
             fprintf(stderr, "break: %s: numeric argument required\n", argv[1]);
             executor_set_status(exec, 1);
+            if (!exec->is_interactive) exit(1); // Exit in non-interactive mode
             return EXEC_FAILURE;
         }
         count = (int)n;
         if (count > exec->loop_depth) {
             fprintf(stderr, "break: %d: loop count out of range\n", count);
             executor_set_status(exec, 1);
+            if (!exec->is_interactive) exit(1); // Exit in non-interactive mode
             return EXEC_FAILURE;
         }
     }
     if (argc > 2) {
         fprintf(stderr, "break: too many arguments\n");
         executor_set_status(exec, 1);
+        if (!exec->is_interactive) exit(1); // Exit in non-interactive mode
         return EXEC_FAILURE;
     }
     exec->break_count = count;
@@ -423,6 +466,7 @@ static ExecStatus builtin_continue(Executor *exec, char **argv, int argc) {
     if (exec->loop_depth == 0) {
         fprintf(stderr, "continue: only meaningful in a loop\n");
         executor_set_status(exec, 1);
+        if (!exec->is_interactive) exit(1); // Exit in non-interactive mode
         return EXEC_FAILURE;
     }
     int count = 1;
@@ -432,18 +476,21 @@ static ExecStatus builtin_continue(Executor *exec, char **argv, int argc) {
         if (*endptr != '\0' || n <= 0) {
             fprintf(stderr, "continue: %s: numeric argument required\n", argv[1]);
             executor_set_status(exec, 1);
+            if (!exec->is_interactive) exit(1); // Exit in non-interactive mode
             return EXEC_FAILURE;
         }
         count = (int)n;
         if (count > exec->loop_depth) {
             fprintf(stderr, "continue: %d: loop count out of range\n", count);
             executor_set_status(exec, 1);
+            if (!exec->is_interactive) exit(1); // Exit in non-interactive mode
             return EXEC_FAILURE;
         }
     }
     if (argc > 2) {
         fprintf(stderr, "continue: too many arguments\n");
         executor_set_status(exec, 1);
+        if (!exec->is_interactive) exit(1); // Exit in non-interactive mode
         return EXEC_FAILURE;
     }
     exec->continue_count = count;
@@ -491,5 +538,5 @@ ExecStatus builtin_execute(Executor *exec, char **argv, int argc) {
     // Not a builtin
     for (int j = 0; j < argc; j++) free(argv[j]);
     free(argv);
-    return EXEC_NOT_BUILTIN; // Custom status to indicate not a builtin
+    return EXEC_NOT_BUILTIN;
 }

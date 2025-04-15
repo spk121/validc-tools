@@ -24,6 +24,7 @@ typedef struct {
     char *function_name;      // Current function, if any
     int loop_depth;           // Track nested loop depth
     int function_depth;       // Track nested function calls
+    bool is_interactive;      // True for interactive shells
 } Executor;
 
 typedef enum {
@@ -32,7 +33,7 @@ typedef enum {
     EXEC_BREAK,
     EXEC_CONTINUE,
     EXEC_RETURN,
-    EXEC_NOT_BUILTIN // Added for builtin_execute
+    EXEC_NOT_BUILTIN
 } ExecStatus;
 
 // Create and destroy executor
