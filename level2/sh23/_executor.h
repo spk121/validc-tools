@@ -2,20 +2,11 @@
 #define EXECUTOR_H
 
 #include <sys/types.h>
-#include "_parser.h"
-#include "_variables.h"
-#include "_function_store.h"
-#include "string.h"
-#include "ptr_array.h"
-
-typedef struct {
-    int signal;      // Signal number (e.g., SIGINT)
-    String *action;  // Command string (NULL for default, "-" for ignore)
-} Trap;
-
-typedef struct {
-    PtrArray *traps; // Array of Trap*
-} TrapStore;
+#include "parser.h"
+#include "variables.h"
+#include "function_store.h"
+#include "trap_store.h"
+#include "builtins.h"
 
 typedef struct {
     VariableStore *vars;      // Variable storage
@@ -40,7 +31,8 @@ typedef enum {
     EXEC_FAILURE,
     EXEC_BREAK,
     EXEC_CONTINUE,
-    EXEC_RETURN
+    EXEC_RETURN,
+    EXEC_NOT_BUILTIN // Added for builtin_execute
 } ExecStatus;
 
 // Create and destroy executor
