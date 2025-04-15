@@ -7,6 +7,7 @@
 #include <errno.h>
 #include <signal.h>
 #include <limits.h>
+#include <sys/stat.h>
 #include "builtins.h"
 #include "string.h"
 #include "tokenizer.h"
@@ -216,6 +217,219 @@ static ExecStatus builtin_cd(Executor *exec, char **argv, int argc) {
 
     executor_set_status(exec, 0);
     return EXEC_SUCCESS;
+}
+
+
+static ExecStatus builtin_test(Executor *exec, char **argv, int argc) {
+    bool is_bracket = (strcmp(argv[0], "[") == 0);
+    int arg_count = argc - 1; // Exclude argv[0]
+    char **args = argv + 1;   // Skip command name
+
+    // For [, require ] as last argument
+    if (is_bracket) {
+        if (arg_count == 0 || strcmp(args[arg_count - 1], "]") != 0) {
+            fprintf(stderr, "%s: missing ]\n", argv[0]);
+            executor_set_status(exec, 2);
+            return EXEC_FAILURE;
+        }
+        arg_count--; // Exclude ]
+        args[arg_count] = NULL;
+    }
+
+    // Forward declaration for recursive parsing
+    static bool evaluate_expr(Executor *exec, char **args, int *pos, int max_args);
+
+    // Evaluate expression
+    int pos = 0;
+    bool result = evaluate_expr(exec, args, &pos, arg_count);
+
+    // Check if all arguments consumed
+    if (pos != arg_count && !result) {
+        fprintf(stderr, "%s: too many arguments\n", argv[0]);
+        executor_set_status(exec, 2);
+        return EXEC_FAILURE;
+    }
+
+    executor_set_status(exec, result ? 0 : 1);
+    return EXEC_SUCCESS;
+}
+
+// Recursive expression evaluation
+static bool evaluate_expr(Executor *exec, char **args, int *pos, int max_args) {
+    if (*pos >= max_args) {
+        return false; // Empty expression is false
+    }
+
+    // Handle !
+    if (strcmp(args[*pos], "!") == 0) {
+        (*pos)++;
+        if (*pos >= max_args) {
+            fprintf(stderr, "%s: unary operator expected\n", args[0]);
+            executor_set_status(exec, 2);
+            return false;
+        }
+        bool result = evaluate_expr(exec, args, pos, max_args);
+        return !result;
+    }
+
+    // Handle ( )
+    if (strcmp(args[*pos], "(") == 0) {
+        (*pos)++;
+        if (*pos >= max_args) {
+            fprintf(stderr, "%s: missing )\n", args[0]);
+            executor_set_status(exec, 2);
+            return false;
+        }
+        bool result = evaluate_expr(exec, args, pos, max_args);
+        if (*pos >= max_args || strcmp(args[*pos], ")") != 0) {
+            fprintf(stderr, "%s: missing )\n", args[0]);
+            executor_set_status(exec, 2);
+            return false;
+        }
+        (*pos)++;
+        return result;
+    }
+
+    // Primary expression
+    bool left_result;
+    if (*pos + 1 < max_args && strcmp(args[*pos + 1], "-o") != 0 && strcmp(args[*pos + 1], "-a") != 0) {
+        // Try binary or unary operator
+        if (*pos + 2 < max_args) {
+            // Binary operators: =, !=, -eq, -ne, etc.
+            char *arg1 = args[*pos];
+            char *op = args[*pos + 1];
+            char *arg2 = args[*pos + 2];
+
+            if (strcmp(op, "=") == 0) {
+                left_result = strcmp(arg1, arg2) == 0;
+                *pos += 3;
+            } else if (strcmp(op, "!=") == 0) {
+                left_result = strcmp(arg1, arg2) != 0;
+                *pos += 3;
+            } else if (strcmp(op, "-eq") == 0 || strcmp(op, "-ne") == 0 ||
+                       strcmp(op, "-lt") == 0 || strcmp(op, "-le") == 0 ||
+                       strcmp(op, "-gt") == 0 || strcmp(op, "-ge") == 0) {
+                char *endptr1, *endptr2;
+                long num1 = strtol(arg1, &endptr1, 10);
+                long num2 = strtol(arg2, &endptr2, 10);
+                if (*endptr1 != '\0' || *endptr2 != '\0') {
+                    fprintf(stderr, "%s: %s: numeric argument required\n", args[0], *endptr1 ? arg1 : arg2);
+                    executor_set_status(exec, 2);
+                    return false;
+                }
+                if (strcmp(op, "-eq") == 0) left_result = num1 == num2;
+                else if (strcmp(op, "-ne") == 0) left_result = num1 != num2;
+                else if (strcmp(op, "-lt") == 0) left_result = num1 < num2;
+                else if (strcmp(op, "-le") == 0) left_result = num1 <= num2;
+                else if (strcmp(op, "-gt") == 0) left_result = num1 > num2;
+                else left_result = num1 >= num2;
+                *pos += 3;
+            } else {
+                // Invalid binary operator
+                goto try_unary;
+            }
+        } else {
+try_unary:
+            // Unary operators: -n, -z, -f, etc.
+            char *op = args[*pos];
+            char *arg = args[*pos + 1];
+            struct stat st;
+
+            if (strcmp(op, "-n") == 0) {
+                left_result = strlen(arg) > 0;
+                *pos += 2;
+            } else if (strcmp(op, "-z") == 0) {
+                left_result = strlen(arg) == 0;
+                *pos += 2;
+            } else if (strcmp(op, "-b") == 0) {
+                left_result = stat(arg, &st) == 0 && S_ISBLK(st.st_mode);
+                *pos += 2;
+            } else if (strcmp(op, "-c") == 0) {
+                left_result = stat(arg, &st) == 0 && S_ISCHR(st.st_mode);
+                *pos += 2;
+            } else if (strcmp(op, "-d") == 0) {
+                left_result = stat(arg, &st) == 0 && S_ISDIR(st.st_mode);
+                *pos += 2;
+            } else if (strcmp(op, "-e") == 0) {
+                left_result = stat(arg, &st) == 0;
+                *pos += 2;
+            } else if (strcmp(op, "-f") == 0) {
+                left_result = stat(arg, &st) == 0 && S_ISREG(st.st_mode);
+                *pos += 2;
+            } else if (strcmp(op, "-g") == 0) {
+                left_result = stat(arg, &st) == 0 && (st.st_mode & S_ISGID);
+                *pos += 2;
+            } else if (strcmp(op, "-h") == 0 || strcmp(op, "-L") == 0) {
+                left_result = lstat(arg, &st) == 0 && S_ISLNK(st.st_mode);
+                *pos += 2;
+            } else if (strcmp(op, "-p") == 0) {
+                left_result = stat(arg, &st) == 0 && S_ISFIFO(st.st_mode);
+                *pos += 2;
+            } else if (strcmp(op, "-r") == 0) {
+                left_result = access(arg, R_OK) == 0;
+                *pos += 2;
+            } else if (strcmp(op, "-s") == 0) {
+                left_result = stat(arg, &st) == 0 && st.st_size > 0;
+                *pos += 2;
+            } else if (strcmp(op, "-t") == 0) {
+                char *endptr;
+                long fd = strtol(arg, &endptr, 10);
+                if (*endptr != '\0' || fd < 0) {
+                    fprintf(stderr, "%s: %s: numeric argument required\n", args[0], arg);
+                    executor_set_status(exec, 2);
+                    return false;
+                }
+                left_result = isatty((int)fd) != 0;
+                *pos += 2;
+            } else if (strcmp(op, "-u") == 0) {
+                left_result = stat(arg, &st) == 0 && (st.st_mode & S_ISUID);
+                *pos += 2;
+            } else if (strcmp(op, "-w") == 0) {
+                left_result = access(arg, W_OK) == 0;
+                *pos += 2;
+            } else if (strcmp(op, "-x") == 0) {
+                left_result = access(arg, X_OK) == 0;
+                *pos += 2;
+            } else {
+                // Single argument case
+                *pos -= 1;
+                left_result = strlen(args[*pos]) > 0;
+                (*pos)++;
+            }
+        }
+    } else {
+        // Single argument
+        left_result = strlen(args[*pos]) > 0;
+        (*pos)++;
+    }
+
+    // Handle -a and -o
+    while (*pos < max_args) {
+        if (strcmp(args[*pos], "-o") == 0) {
+            (*pos)++;
+            if (*pos >= max_args) {
+                fprintf(stderr, "%s: binary operator expected\n", args[0]);
+                executor_set_status(exec, 2);
+                return false;
+            }
+            bool right_result = evaluate_expr(exec, args, pos, max_args);
+            return left_result || right_result;
+        } else if (strcmp(args[*pos], "-a") == 0) {
+            (*pos)++;
+            if (*pos >= max_args) {
+                fprintf(stderr, "%s: binary operator expected\n", args[0]);
+                executor_set_status(exec, 2);
+                return false;
+            }
+            bool right_result = evaluate_expr(exec, args, pos, max_args);
+            if (!left_result) return false; // Short-circuit
+            left_result = right_result;
+        } else {
+            break; // Extra args handled by caller
+        }
+    }
+
+    return left_result;
 }
 
 static ExecStatus builtin_colon(Executor *exec, char **argv, int argc) {
@@ -837,6 +1051,7 @@ static ExecStatus builtin_continue(Executor *exec, char **argv, int argc) {
     return EXEC_CONTINUE;
 }
 
+
 ExecStatus builtin_execute(Executor *exec, char **argv, int argc) {
     if (!argv || !argv[0]) {
         executor_set_status(exec, 0);
@@ -863,6 +1078,8 @@ ExecStatus builtin_execute(Executor *exec, char **argv, int argc) {
         { "break", builtin_break },
         { "continue", builtin_continue },
         { "cd", builtin_cd },
+        { "test", builtin_test },
+        { "[", builtin_test },
         { NULL, NULL }
     };
 
