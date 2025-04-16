@@ -155,6 +155,15 @@ int string_append_cstr(String *str, const char *data)
     return 0;
 }
 
+int string_append_ascii_char(String *str, char c)
+{
+    return_val_if_null (str, -1);
+    return_val_if_lt(c, 0, -1);
+    return_val_if_ge(c, 128, -1);
+    const char cstr[2] = {c, 0};
+    string_append_cstr(str, cstr);
+}
+
 int string_append(String *str, const String *other)
 {
     return_val_if_null (str, -1);

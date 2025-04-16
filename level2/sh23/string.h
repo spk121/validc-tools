@@ -19,6 +19,7 @@ int string_is_empty(const String *str);
 
 // Modification
 int string_append_cstr(String *str, const char *data);
+int string_append_ascii_char(String *str, char c);
 int string_append(String *str, const String *other);
 int string_clear(String *str);
 int string_set_cstr(String *str, const char *data);

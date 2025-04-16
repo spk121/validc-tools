@@ -1,0 +1,216 @@
+Test 1: Simple Command with Arguments
+Input: echo hello world
+Expected Tokens:
+TOKEN_WORD: "echo"
+
+TOKEN_WORD: "hello"
+
+TOKEN_WORD: "world"
+Purpose: Tests basic word tokenization with multiple arguments separated by whitespace.
+
+Test 2: Pipeline
+Input: ls | grep txt
+Expected Tokens:
+TOKEN_WORD: "ls"
+
+TOKEN_OPERATOR: "|"
+
+TOKEN_WORD: "grep"
+
+TOKEN_WORD: "txt"
+Purpose: Verifies recognition of the pipe operator and separation of commands.
+
+Test 3: Input Redirection
+Input: cat < input.txt
+Expected Tokens:
+TOKEN_WORD: "cat"
+
+TOKEN_OPERATOR: "<"
+
+TOKEN_WORD: "input.txt"
+Purpose: Ensures proper handling of redirection operators and filenames.
+
+Test 4: Variable Assignment
+Input: var=value
+Expected Tokens:
+TOKEN_ASSIGNMENT: "var=value"
+Purpose: Tests identification of assignment syntax as a single token.
+
+Test 5: Assignment with Command and Redirection
+Input: var=value cmd > output.txt
+Expected Tokens:
+TOKEN_ASSIGNMENT: "var=value"
+
+TOKEN_WORD: "cmd"
+
+TOKEN_OPERATOR: ">"
+
+TOKEN_WORD: "output.txt"
+Purpose: Combines assignment, command, and redirection to test token separation.
+
+Test 6: Double-Quoted String with Expansion Syntax
+Input: echo "Hello $USER"
+Expected Tokens:
+TOKEN_WORD: "echo"
+
+TOKEN_WORD: "Hello $USER"
+Purpose: Checks handling of double quotes, preserving expansion syntax as part of the token (expansion occurs later).
+
+Test 7: Single-Quoted String
+Input: echo 'Hello $USER'
+Expected Tokens:
+TOKEN_WORD: "echo"
+
+TOKEN_WORD: "Hello $USER"
+Purpose: Verifies single quotes group content without interpreting expansions, treated as a single token.
+
+Test 8: Escaped Space
+Input: echo Hello\ World
+Expected Tokens:
+TOKEN_WORD: "echo"
+
+TOKEN_WORD: "Hello World"
+Purpose: Tests that an escaped space is included in the token, forming a single word.
+
+Test 9: Logical Operators
+Input: cmd1 && cmd2 || cmd3
+Expected Tokens:
+TOKEN_WORD: "cmd1"
+
+TOKEN_AND_IF: "&&"
+
+TOKEN_WORD: "cmd2"
+
+TOKEN_OR_IF: "||"
+
+TOKEN_WORD: "cmd3"
+Purpose: Ensures recognition of multi-character logical operators (&&, ||) as distinct tokens.
+
+Test 10: Command Substitution with $(...)
+Input: echo $(ls)
+Expected Tokens:
+TOKEN_WORD: "echo"
+
+TOKEN_DPAREN: "$(ls)"
+Purpose: Tests identification of command substitution as a single token.
+
+Test 11: Nested Command Substitution
+Input: echo $(echo $(date))
+Expected Tokens:
+TOKEN_WORD: "echo"
+
+TOKEN_DPAREN: "$(echo $(date))"
+Purpose: Verifies handling of nested substitutions as a single, complete token.
+
+Test 12: Arithmetic Expansion
+Input: echo $((1 + 2))
+Expected Tokens:
+TOKEN_WORD: "echo"
+
+TOKEN_ARITH: "$((1 + 2))"
+Purpose: Ensures arithmetic expansion is tokenized correctly.
+
+Test 13: Parameter Expansion with Default
+Input: echo ${var:-default}
+Expected Tokens:
+TOKEN_WORD: "echo"
+
+TOKEN_PARAM: "${var:-default}"
+Purpose: Tests recognition of complex parameter expansion syntax.
+
+Test 14: Tilde Expansion (Home Directory)
+Input: echo ~
+Expected Tokens:
+TOKEN_WORD: "echo"
+
+TOKEN_TILDE: "~"
+Purpose: Verifies tilde is recognized as a distinct token for expansion.
+
+Test 15: Tilde with Username
+Input: echo ~user
+Expected Tokens:
+TOKEN_WORD: "echo"
+
+TOKEN_TILDE: "~user"
+Purpose: Tests tilde expansion with a username as a single token.
+
+Test 16: Command with Comment
+Input: echo hello # comment
+Expected Tokens:
+TOKEN_WORD: "echo"
+
+TOKEN_WORD: "hello"
+
+TOKEN_COMMENT: "# comment"
+Purpose: Ensures comments are tokenized separately and do not interfere with prior tokens.
+
+Test 17: Redirection with IO Number
+Input: 2> error.log
+Expected Tokens:
+TOKEN_IO_NUMBER: "2"
+
+TOKEN_OPERATOR: ">"
+
+TOKEN_WORD: "error.log"
+Purpose: Tests recognition of an IO number before a redirection operator.
+
+Test 18: If Statement
+Input: if true; then echo yes; fi
+Expected Tokens:
+TOKEN_KEYWORD: "if"
+
+TOKEN_WORD: "true"
+
+TOKEN_SEMI: ";"
+
+TOKEN_KEYWORD: "then"
+
+TOKEN_WORD: "echo"
+
+TOKEN_WORD: "yes"
+
+TOKEN_SEMI: ";"
+
+TOKEN_KEYWORD: "fi"
+Purpose: Verifies tokenization of control keywords and semicolons in a compound command.
+
+Test 19: For Loop
+Input: for i in 1 2 3; do echo $i; done
+Expected Tokens:
+TOKEN_KEYWORD: "for"
+
+TOKEN_WORD: "i"
+
+TOKEN_KEYWORD: "in"
+
+TOKEN_WORD: "1"
+
+TOKEN_WORD: "2"
+
+TOKEN_WORD: "3"
+
+TOKEN_SEMI: ";"
+
+TOKEN_KEYWORD: "do"
+
+TOKEN_WORD: "echo"
+
+TOKEN_WORD: "$i"
+
+TOKEN_SEMI: ";"
+
+TOKEN_KEYWORD: "done"
+Purpose: Tests tokenization of a loop structure, including keywords and simple variable references.
+
+Test 20: File Descriptor Redirection
+Input: cmd 2>&1
+Expected Tokens:
+TOKEN_WORD: "cmd"
+
+TOKEN_IO_NUMBER: "2"
+
+TOKEN_GREATAND: ">&"
+
+TOKEN_WORD: "1"
+Purpose: Ensures proper handling of IO numbers and the >& redirection operator.
+

@@ -30,11 +30,17 @@ int tokenizer_add_token(Tokenizer *tokenizer, Token *token);
 int tokenizer_add_token_cstr(Tokenizer *tokenizer, TokenType type, const char *text);
 const TokenArray *tokenizer_get_tokens(const Tokenizer *tokenizer);
 size_t tokenizer_token_count(const Tokenizer *tokenizer);
+Token *tokenizer_get_token(const Tokenizer *tokenizer, size_t i);
 
 // Parsing functions
 int tokenizer_process_char(Tokenizer *tokenizer, char c);
 int tokenizer_process_input(Tokenizer *tokenizer, const char *input);
 int tokenizer_process_string(Tokenizer *tokenizer, const String *input);
+// Handles one-line-at-a-time processing
+int tokenizer_process_line(Tokenizer *tokenizer, const char *line);
+// Indicates if the tokenizer is not waiting for heredoc or other continuation
+// or nesting.
+bool tokenizer_is_complete(const Tokenizer *tokenizer);
 int tokenizer_finalize(Tokenizer *tokenizer);
 
 // State getters
