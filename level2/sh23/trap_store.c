@@ -1,134 +1,160 @@
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <signal.h>
 #include "trap_store.h"
-#include "tokenizer.h"
-#include "parser.h"
+#include <stdlib.h>
 
-// Global executor for signal handler
-static Executor *global_executor = NULL;
+struct TrapStore {
+    TrapArray *traps;
+};
 
-TrapStore *trap_store_create(void) {
+// Comparison function for finding Trap by signal
+static int compare_trap_signal(const Trap *trap, const void *signal)
+{
+    return trap_get_signal(trap) - *(const int *)signal;
+}
+
+// Constructor
+TrapStore *trap_store_create(void)
+{
     TrapStore *store = malloc(sizeof(TrapStore));
-    if (!store) return NULL;
-    store->traps = ptr_array_create();
-    if (!store->traps) {
-        free(store);
+    if (!store) {
+        log_fatal("trap_store_create: out of memory");
         return NULL;
     }
+
+    store->traps = trap_array_create_with_free((TrapArrayFreeFunc)trap_destroy);
+    if (!store->traps) {
+        free(store);
+        log_fatal("trap_store_create: failed to create traps array");
+        return NULL;
+    }
+
     return store;
 }
 
-void trap_store_destroy(TrapStore *store) {
-    if (!store) return;
-    for (int i = 0; i < store->traps->len; i++) {
-        Trap *trap = store->traps->data[i];
-        string_destroy(trap->action);
-        free(trap);
+// Destructor
+void trap_store_destroy(TrapStore *store)
+{
+    if (store) {
+        log_debug("trap_store_destroy: freeing store %p, traps %zu",
+                  store, trap_array_size(store->traps));
+        trap_array_destroy(store->traps);
+        free(store);
     }
-    ptr_array_destroy(store->traps);
-    free(store);
 }
 
-void trap_store_set(TrapStore *store, int signal, const char *action) {
-    // Find existing trap
-    for (int i = 0; i < store->traps->len; i++) {
-        Trap *trap = store->traps->data[i];
-        if (trap->signal == signal) {
-            string_destroy(trap->action);
-            if (action == NULL) {
-                trap->action = NULL; // Default
-            } else if (strcmp(action, "-") == 0) {
-                trap->action = string_create_from("-");
-            } else {
-                trap->action = string_create_from(action);
-            }
-            return;
+// Clear all traps
+int trap_store_clear(TrapStore *store)
+{
+    return_val_if_null(store, -1);
+
+    log_debug("trap_store_clear: clearing store %p, traps %zu",
+              store, trap_array_size(store->traps));
+
+    return trap_array_clear(store->traps);
+}
+
+// Trap management
+int trap_store_set_trap(TrapStore *store, int signal, const String *action)
+{
+    return_val_if_null(store, -1);
+
+    size_t index;
+    if (trap_array_find_with_compare(store->traps, &signal, compare_trap_signal, &index) == 0) {
+        // Replace existing trap
+        Trap *new_trap = trap_create(signal, action);
+        if (!new_trap) {
+            log_fatal("trap_store_set_trap: failed to create trap for signal %d", signal);
+            return -1;
         }
+        return trap_array_set(store->traps, index, new_trap);
     }
-    // New trap
-    Trap *trap = malloc(sizeof(Trap));
-    if (!trap) return;
-    trap->signal = signal;
-    if (action == NULL) {
-        trap->action = NULL;
-    } else if (strcmp(action, "-") == 0) {
-        trap->action = string_create_from("-");
-    } else {
-        trap->action = string_create_from(action);
+
+    // Add new trap
+    Trap *trap = trap_create(signal, action);
+    if (!trap) {
+        log_fatal("trap_store_set_trap: failed to create trap for signal %d", signal);
+        return -1;
     }
-    if (action && trap->action == NULL) {
-        free(trap);
-        return;
+
+    if (trap_array_append(store->traps, trap) != 0) {
+        trap_destroy(trap);
+        log_fatal("trap_store_set_trap: failed to append trap for signal %d", signal);
+        return -1;
     }
-    ptr_array_append(store->traps, trap);
+
+    return 0;
 }
 
-Trap *trap_store_get(TrapStore *store, int signal) {
-    for (int i = 0; i < store->traps->len; i++) {
-        Trap *trap = store->traps->data[i];
-        if (trap->signal == signal) {
-            return trap;
+int trap_store_set_trap_cstr(TrapStore *store, int signal, const char *action)
+{
+    return_val_if_null(store, -1);
+
+    size_t index;
+    if (trap_array_find_with_compare(store->traps, &signal, compare_trap_signal, &index) == 0) {
+        // Replace existing trap
+        Trap *new_trap = trap_create_from_cstr(signal, action);
+        if (!new_trap) {
+            log_fatal("trap_store_set_trap_cstr: failed to create trap for signal %d", signal);
+            return -1;
         }
+        return trap_array_set(store->traps, index, new_trap);
     }
-    return NULL;
+
+    // Add new trap
+    Trap *trap = trap_create_from_cstr(signal, action);
+    if (!trap) {
+        log_fatal("trap_store_set_trap_cstr: failed to create trap for signal %d", signal);
+        return -1;
+    }
+
+    if (trap_array_append(store->traps, trap) != 0) {
+        trap_destroy(trap);
+        log_fatal("trap_store_set_trap_cstr: failed to append trap for signal %d", signal);
+        return -1;
+    }
+
+    return 0;
 }
 
-void trap_store_print(TrapStore *store) {
-    for (int i = 0; i < store->traps->len; i++) {
-        Trap *trap = store->traps->data[i];
-        const char *sig_name = NULL;
-        switch (trap->signal) {
-            case SIGHUP: sig_name = "HUP"; break;
-            case SIGINT: sig_name = "INT"; break;
-            case SIGQUIT: sig_name = "QUIT"; break;
-            case SIGTERM: sig_name = "TERM"; break;
-            case SIGKILL: sig_name = "KILL"; break;
-            case SIGUSR1: sig_name = "USR1"; break;
-            case SIGUSR2: sig_name = "USR2"; break;
-            default: continue;
-        }
-        if (trap->action) {
-            printf("trap %s %s\n", string_cstr(trap->action), sig_name);
-        } else {
-            printf("trap '' %s\n", sig_name);
-        }
+int trap_store_remove_trap(TrapStore *store, int signal)
+{
+    return_val_if_null(store, -1);
+
+    size_t index;
+    if (trap_array_find_with_compare(store->traps, &signal, compare_trap_signal, &index) != 0) {
+        return -1; // Signal not found
     }
+
+    return trap_array_remove(store->traps, index);
 }
 
-// Signal handler
-static void signal_handler(int sig) {
-    if (!global_executor) return;
-    Trap *trap = trap_store_get(global_executor->trap_store, sig);
-    if (!trap || !trap->action || strcmp(string_cstr(trap->action), "-") == 0) {
-        return; // Ignore or no action
+const Trap *trap_store_get_trap(const TrapStore *store, int signal)
+{
+    return_val_if_null(store, NULL);
+
+    size_t index;
+    if (trap_array_find_with_compare(store->traps, &signal, compare_trap_signal, &index) != 0) {
+        return NULL; // Signal not found
     }
-    // Execute command in current environment
-    String *action = string_create_from(string_cstr(trap->action));
-    PtrArray *tokens = ptr_array_create();
-    Tokenizer *tokenizer = tokenizer_create();
-    if (tokenize_string(tokenizer, action, tokens, global_executor->alias_store, NULL) != TOKENIZER_SUCCESS) {
-        ptr_array_destroy_with_elements(tokens, token_free);
-        tokenizer_destroy(tokenizer);
-        string_destroy(action);
-        return;
-    }
-    Parser *parser = parser_create(tokenizer, global_executor->alias_store);
-    ASTNode *ast = NULL;
-    ParseStatus parse_status = parser_apply_tokens(parser, tokens, &ast);
-    ptr_array_destroy_with_elements(tokens, token_free);
-    if (parse_status != PARSE_COMPLETE || !ast) {
-        parser_destroy(parser);
-        string_destroy(action);
-        return;
-    }
-    executor_run(global_executor, ast);
-    // Note: AST cleanup is parser’s responsibility
-    parser_destroy(parser);
-    string_destroy(action);
+
+    return trap_array_get(store->traps, index);
 }
 
-void trap_store_set_executor(Executor *exec) {
-    global_executor = exec;
+const String *trap_store_get_action(const TrapStore *store, int signal)
+{
+    const Trap *trap = trap_store_get_trap(store, signal);
+    return trap ? trap_get_action(trap) : NULL;
+}
+
+const char *trap_store_get_action_cstr(const TrapStore *store, int signal)
+{
+    const Trap *trap = trap_store_get_trap(store, signal);
+    return trap ? trap_get_action_cstr(trap) : NULL;
+}
+
+int trap_store_has_trap(const TrapStore *store, int signal)
+{
+    return_val_if_null(store, -1);
+
+    size_t index;
+    return trap_array_find_with_compare(store->traps, &signal, compare_trap_signal, &index) == 0 ? 1 : 0;
 }

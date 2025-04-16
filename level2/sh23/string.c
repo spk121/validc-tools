@@ -265,6 +265,7 @@ int string_replace_cstr(String *str, const char *find, const char *replace, int 
     return_val_if_null (replace, -1);
     return_val_if_eq (find[0], '\0', -1);
 
+    size_t find_len = strlen(find);
     String *result = string_create_empty(str->length + 1);
     if (!result) {
         log_fatal ("string_replace_cstr: out of memory");

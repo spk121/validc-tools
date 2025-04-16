@@ -3,23 +3,23 @@
 
 #include <stdbool.h>
 #include "string.h"
-#include "ptr_array.h"
+#include "logging.h"
 
 typedef struct {
     String *name;
     String *value;
-    bool exported; // 1 if exported, 0 otherwise
-    bool read_only;
+    bool exported; // true if exported, false otherwise
+    bool read_only; // true if value cannot be, false if value can be modified
 } Variable;
 
 typedef struct {
-    PtrArray *variables;      // Regular variables
-    PtrArray *positional_params; // $1, $2, ...
-    char status_str[16];      // $?
+    VariableArray *variables;      // Regular variables
+    VariableArray *positional_params; // $1, $2, ...
+    String *status_str;       // $?
     long pid;                 // $$ - really a pid_t
-    char *shell_name;         // $0
+    String *shell_name;       // $0
     long last_bg_pid;         // $! - really a pid_t
-    char options[16];         // $-
+    String *options;          // $-
 } VariableStore;
 
 VariableStore *variable_store_create(const char *shell_name);

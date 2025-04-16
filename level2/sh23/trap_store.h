@@ -2,32 +2,27 @@
 #define TRAP_STORE_H
 
 #include "string.h"
-#include "ptr_array.h"
-#include "executor.h"
+#include "trap_array.h"
+#include "logging.h"
 
-typedef struct {
-    int signal;      // Signal number (e.g., SIGINT)
-    String *action;  // Command string (NULL for default, "-" for ignore)
-} Trap;
+typedef struct TrapStore TrapStore;
 
-typedef struct {
-    PtrArray *traps; // Array of Trap*
-} TrapStore;
-
-// Create and destroy trap store
+// Constructor
 TrapStore *trap_store_create(void);
+
+// Destructor
 void trap_store_destroy(TrapStore *store);
 
-// Set trap action for a signal
-void trap_store_set(TrapStore *store, int signal, const char *action);
+// Clear all traps
+int trap_store_clear(TrapStore *store);
 
-// Get trap for a signal
-Trap *trap_store_get(TrapStore *store, int signal);
-
-// Print all traps (for 'trap' command)
-void trap_store_print(TrapStore *store);
-
-// Set executor for signal handler
-void trap_store_set_executor(Executor *exec);
+// Trap management
+int trap_store_set_trap(TrapStore *store, int signal, const String *action);
+int trap_store_set_trap_cstr(TrapStore *store, int signal, const char *action);
+int trap_store_remove_trap(TrapStore *store, int signal);
+const Trap *trap_store_get_trap(const TrapStore *store, int signal);
+const String *trap_store_get_action(const TrapStore *store, int signal);
+const char *trap_store_get_action_cstr(const TrapStore *store, int signal);
+int trap_store_has_trap(const TrapStore *store, int signal);
 
 #endif

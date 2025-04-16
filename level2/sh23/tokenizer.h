@@ -1,92 +1,74 @@
 #ifndef TOKENIZER_H
 #define TOKENIZER_H
 
-#include "alias.h"
 #include "string.h"
-#include "ptr_array.h"
+#include "token.h"
+#include "token_array.h"
+#include "logging.h"
 
-typedef enum
-{
-    TOKEN_UNSPECIFIED = 0, 
-    TOKEN_WORD,          // Command, argument, variable, or here-document content
-    TOKEN_ASSIGNMENT,    // Variable assignment (e.g., var=value)
-    TOKEN_NEWLINE,       // \n
-    TOKEN_IO_NUMBER,     // Number before redirection (e.g., 2>)
-    TOKEN_OPERATOR,      // |, (,  ),  {,  }, etc.
-    TOKEN_KEYWORD,       // Reserved words: if, while, for, etc.
-    TOKEN_PARAM,         // Parameter expansion ${...} (e.g., "${var}", "${var:-word}", "${var-word}", "${var:=word}", "${var=word}", "${var:?word}", "${var?word}", "${var:+word}", "${var+word}", "${#parameter}", "${parameter%word}", "${parameter%%word}", "${parameter#word}", "${parameter##word}")
-    TOKEN_DPAREN,        // Command substitution $(...) including inner content
-    TOKEN_BACKTICK,      // Command substitution `...` including inner content
-    TOKEN_ARITH,         // Arithmetic expansion $((...)) including inner content
-    TOKEN_TILDE,         // ~ or ~user
-    TOKEN_DLESS,         // << (heredoc operator, followed by TOKEN_HEREDOC_DELIM and TOKEN_WORD)
-    TOKEN_DGREAT,        // >>
-    TOKEN_DLESSDASH,     // <<- (heredoc with tab stripping, followed by TOKEN_HEREDOC_DELIM and TOKEN_WORD)
-    TOKEN_LESSAND,       // <&
-    TOKEN_GREATAND,      // >&
-    TOKEN_LESSGREAT,     // <>
-    TOKEN_CLOBBER,       // >|
-    TOKEN_HEREDOC_DELIM, // Here-document delimiter (e.g., "EOF", "'EOF'")
-    TOKEN_DSEMI,         // ;;
-    TOKEN_SEMI,          // ;
-    TOKEN_AMP,           // &
-    TOKEN_AND_IF,        // &&
-    TOKEN_OR_IF,         // ||
-    TOKEN_COMMENT,       // Comment starting with # until newline (e.g., "# text")
-    TOKEN_EOF,           // End of input
-} TokenType;
+typedef struct Tokenizer Tokenizer;
 
-typedef struct
-{
-    String *text;   // Token content (UTF-8); for TOKEN_WORD after TOKEN_HEREDOC_DELIM, contains content only
-    TokenType type; // Token type
-    int quoted;     // Unused for now, but could be use to indicate that the surrounding quote
-                    // have been stripped off.
-} Token;
+// Validate a name (POSIX: alphanumeric or underscore, not starting with digit)
+int is_valid_name(const String *name);
+int is_valid_name_cstr(const char *name);
 
-// Tokenizer status for interactive mode
-typedef enum
-{
-    TOKENIZER_SUCCESS,           // Line fully tokenized
-    TOKENIZER_FAILURE,           // Tokenization error (e.g., memory allocation)
-    TOKENIZER_LINE_CONTINUATION, // Backslash at end, awaiting more input
-    TOKENIZER_HEREDOC            // Awaiting here-document delimiter
-} TokenizerStatus;
+// Validate a number (all digits)
+int is_number(const String *text);
+int is_number_cstr(const char *text);
 
-// Tokenizer state for interactive mode
-typedef struct
-{
-    String *current_token;   // Partial token being built
-    PtrArray *tokens;        // Accumulated tokens
-    String *heredoc_delim;   // Current here-document delimiter, if any
-    String *heredoc_content; // Here-document content being collected
-    int in_quotes;           // Single quote state
-    int in_dquotes;          // Double quote state
-    int escaped;             // Backslash escape state
-    int is_first_word;       // For alias substitution
-    int after_heredoc_op;    // Awaiting here-document delimiter
-    int paren_depth_dparen;  // For $(...)
-    int paren_depth_arith;   // For $((...)
-    int in_backtick;         // For `...`
-    int brace_depth_param;   // For ${...}
-} Tokenizer;
-
-// Create and destroy tokenizer
+// Constructor
 Tokenizer *tokenizer_create(void);
+
+// Destructor
 void tokenizer_destroy(Tokenizer *tokenizer);
 
-// Free function for Token
-void token_free(void *element);
+// Clear state and tokens
+int tokenizer_clear(Tokenizer *tokenizer);
 
-// Create a new token
-Token *token_create(String *text, TokenType type);
+// Token management
+int tokenizer_add_token(Tokenizer *tokenizer, Token *token);
+int tokenizer_add_token_cstr(Tokenizer *tokenizer, TokenType type, const char *text);
+const TokenArray *tokenizer_get_tokens(const Tokenizer *tokenizer);
+size_t tokenizer_token_count(const Tokenizer *tokenizer);
 
-// Validate a name (alphanumeric or underscore, not starting with digit)
-int is_valid_name_zstring(const char *name);
-int is_valid_name_string(const String *name);
+// Parsing functions
+int tokenizer_process_char(Tokenizer *tokenizer, char c);
+int tokenizer_process_input(Tokenizer *tokenizer, const char *input);
+int tokenizer_process_string(Tokenizer *tokenizer, const String *input);
+int tokenizer_finalize(Tokenizer *tokenizer);
 
-// Tokenize input into a PtrArray of Token*
-TokenizerStatus tokenize_zstring(Tokenizer *tokenizer, const char *input, PtrArray *tokens, AliasStore *alias_store, int (*get_line)(char *buf, int size));
-TokenizerStatus tokenize_string(Tokenizer *tokenizer, String *input, PtrArray *tokens, AliasStore *alias_store, int (*get_line)(char *buf, int size));
-void token_print(Token *t);
+// State getters
+const String *tokenizer_get_current_token(const Tokenizer *tokenizer);
+const String *tokenizer_get_heredoc_delim(const Tokenizer *tokenizer);
+const String *tokenizer_get_heredoc_content(const Tokenizer *tokenizer);
+int tokenizer_get_in_quotes(const Tokenizer *tokenizer);
+int tokenizer_get_in_dquotes(const Tokenizer *tokenizer);
+int tokenizer_get_escaped(const Tokenizer *tokenizer);
+int tokenizer_get_is_first_word(const Tokenizer *tokenizer);
+int tokenizer_get_after_heredoc_op(const Tokenizer *tokenizer);
+int tokenizer_get_paren_depth_dparen(const Tokenizer *tokenizer);
+int tokenizer_get_paren_depth_arith(const Tokenizer *tokenizer);
+int tokenizer_get_in_backtick(const Tokenizer *tokenizer);
+int tokenizer_get_brace_depth_param(const Tokenizer *tokenizer);
+
+// State setters
+int tokenizer_set_current_token(Tokenizer *tokenizer, const String *current_token);
+int tokenizer_set_current_token_cstr(Tokenizer *tokenizer, const char *current_token);
+int tokenizer_set_heredoc_delim(Tokenizer *tokenizer, const String *heredoc_delim);
+int tokenizer_set_heredoc_delim_cstr(Tokenizer *tokenizer, const char *heredoc_delim);
+int tokenizer_set_heredoc_content(Tokenizer *tokenizer, const String *heredoc_content);
+int tokenizer_set_heredoc_content_cstr(Tokenizer *tokenizer, const char *heredoc_content);
+int tokenizer_set_in_quotes(Tokenizer *tokenizer, int in_quotes);
+int tokenizer_set_in_dquotes(Tokenizer *tokenizer, int in_dquotes);
+int tokenizer_set_escaped(Tokenizer *tokenizer, int escaped);
+int tokenizer_set_is_first_word(Tokenizer *tokenizer, int is_first_word);
+int tokenizer_set_after_heredoc_op(Tokenizer *tokenizer, int after_heredoc_op);
+int tokenizer_set_paren_depth_dparen(Tokenizer *tokenizer, int paren_depth_dparen);
+int tokenizer_set_paren_depth_arith(Tokenizer *tokenizer, int paren_depth_arith);
+int tokenizer_set_in_backtick(Tokenizer *tokenizer, int in_backtick);
+int tokenizer_set_brace_depth_param(Tokenizer *tokenizer, int brace_depth_param);
+
+// Debugging
+String *tokenizer_to_string(const Tokenizer *tokenizer);
+
 #endif

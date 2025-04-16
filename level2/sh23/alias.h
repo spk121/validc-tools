@@ -1,24 +1,28 @@
 #ifndef ALIAS_H
 #define ALIAS_H
 
-#define MAX_ALIAS_NAME 256
-#define MAX_ALIAS_VALUE 1024
+#include "string.h"
+#include "logging.h"
 
-typedef struct
-{
-    char name[MAX_ALIAS_NAME];
-    char value[MAX_ALIAS_VALUE];
-} Alias;
+typedef struct Alias Alias;
 
-// Opaque handle for alias store
-typedef struct AliasStore AliasStore;
+// Constructors
+Alias *alias_create(const String *name, const String *value);
+Alias *alias_create_from_cstr(const char *name, const char *value);
 
-AliasStore *alias_store_create(void);
-void alias_store_destroy(AliasStore *store);
-int alias_add(AliasStore *store, const char *name, const char *value);
-int alias_remove(AliasStore *store, const char *name);
-const char *alias_get(const AliasStore *store, const char *name);
-int alias_exists(const AliasStore *store, const char *name);
-int alias_is_active(const char *name, char **active_aliases, int active_alias_count);
+// Destructor
+void alias_destroy(Alias *alias);
+
+// Getters
+const String *alias_get_name(const Alias *alias);
+const String *alias_get_value(const Alias *alias);
+const char *alias_get_name_cstr(const Alias *alias);
+const char *alias_get_value_cstr(const Alias *alias);
+
+// Setters
+int alias_set_name(Alias *alias, const String *name);
+int alias_set_value(Alias *alias, const String *value);
+int alias_set_name_cstr(Alias *alias, const char *name);
+int alias_set_value_cstr(Alias *alias, const char *value);
 
 #endif
