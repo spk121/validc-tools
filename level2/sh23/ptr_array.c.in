@@ -1,0 +1,246 @@
+#include "CLASS_NAME_LOWER.h"
+#include "logging.h"
+#include <stdlib.h>
+#include <string.h>
+/* INCLUDE1 */
+/* INCLUDE2 */
+
+#define INITIAL_CAPACITY 16
+#define GROW_FACTOR 2
+
+struct CLASS_NAME {
+    ELEMENT_TYPE *data;
+    size_t size;
+    size_t capacity;
+    CLASS_NAMEFreeFunc free_func;
+};
+
+// Helper: Ensure capacity
+static int PREFIXensure_capacity(CLASS_NAME *array, size_t needed)
+{
+    return_val_if_null(array, -1);
+    return_val_if_lt(needed, 0, -1);
+
+    if (needed <= array->capacity)
+        return 0;
+
+    size_t new_capacity = array->capacity ? array->capacity : INITIAL_CAPACITY;
+    while (new_capacity < needed)
+        new_capacity *= GROW_FACTOR;
+
+    ELEMENT_TYPE *new_data = realloc(array->data, new_capacity * sizeof(ELEMENT_TYPE));
+    if (!new_data) {
+        log_fatal("PREFIXensure_capacity: memory allocation failure");
+        return -1;
+    }
+
+    array->data = new_data;
+    array->capacity = new_capacity;
+    return 0;
+}
+
+// Create and destroy
+CLASS_NAME *PREFIXcreate(void)
+{
+    return PREFIXcreate_with_free(NULL);
+}
+
+CLASS_NAME *PREFIXcreate_with_free(CLASS_NAMEFreeFunc free_func)
+{
+    CLASS_NAME *array = malloc(sizeof(CLASS_NAME));
+    if (!array) {
+        log_fatal("PREFIXcreate_with_free: out of memory");
+        return NULL;
+    }
+
+    array->data = NULL;
+    array->size = 0;
+    array->capacity = 0;
+    array->free_func = free_func;
+
+    if (PREFIXensure_capacity(array, INITIAL_CAPACITY) != 0) {
+        free(array);
+        log_fatal("PREFIXcreate_with_free: out of memory");
+        return NULL;
+    }
+
+    return array;
+}
+
+void PREFIXdestroy(CLASS_NAME *array)
+{
+    if (array) {
+        log_debug("PREFIXdestroy: freeing array %p, size %zu", array, array->size);
+        if (array->free_func) {
+            for (size_t i = 0; i < array->size; i++) {
+                if (array->data[i]) {
+                    array->free_func(array->data[i]);
+                }
+            }
+        }
+        free(array->data);
+        free(array);
+    }
+}
+
+// Accessors
+size_t PREFIXsize(const CLASS_NAME *array)
+{
+    return_val_if_null(array, 0);
+    return array->size;
+}
+
+size_t PREFIXcapacity(const CLASS_NAME *array)
+{
+    return_val_if_null(array, 0);
+    return array->capacity;
+}
+
+ELEMENT_TYPE PREFIXget(const CLASS_NAME *array, size_t index)
+{
+    return_val_if_null(array, NULL);
+    return_val_if_ge(index, array->size, NULL);
+    return array->data[index];
+}
+
+int PREFIXis_empty(const CLASS_NAME *array)
+{
+    return_val_if_null(array, 1);
+    return array->size == 0;
+}
+
+// Modification
+int PREFIXappend(CLASS_NAME *array, ELEMENT_TYPE element)
+{
+    return_val_if_null(array, -1);
+    if (PREFIXensure_capacity(array, array->size + 1) != 0) {
+        log_fatal("PREFIXappend: out of memory");
+        return -1;
+    }
+
+    array->data[array->size] = element;
+    array->size++;
+    return 0;
+}
+
+int PREFIXset(CLASS_NAME *array, size_t index, ELEMENT_TYPE element)
+{
+    return_val_if_null(array, -1);
+    return_val_if_ge(index, array->size, -1);
+
+    if (array->free_func && array->data[index]) {
+        array->free_func(array->data[index]);
+    }
+    array->data[index] = element;
+    return 0;
+}
+
+int PREFIXremove(CLASS_NAME *array, size_t index)
+{
+    return_val_if_null(array, -1);
+    return_val_if_ge(index, array->size, -1);
+
+    if (array->free_func && array->data[index]) {
+        array->free_func(array->data[index]);
+    }
+
+    // Shift elements to fill the gap
+    for (size_t i = index; i < array->size - 1; i++) {
+        array->data[i] = array->data[i + 1];
+    }
+    array->size--;
+    array->data[array->size] = NULL; // Clear the last slot
+    return 0;
+}
+
+int PREFIXclear(CLASS_NAME *array)
+{
+    return_val_if_null(array, -1);
+
+    if (array->free_func) {
+        for (size_t i = 0; i < array->size; i++) {
+            if (array->data[i]) {
+                array->free_func(array->data[i]);
+            }
+        }
+    }
+    array->size = 0;
+    // Keep capacity and data allocated, just clear pointers
+    for (size_t i = 0; i < array->capacity; i++) {
+        array->data[i] = NULL;
+    }
+    return 0;
+}
+
+int PREFIXresize(CLASS_NAME *array, size_t new_capacity)
+{
+    return_val_if_null(array, -1);
+    return_val_if_lt(new_capacity, 0, -1);
+
+    if (new_capacity < array->size) {
+        // Free elements that won't fit in the new capacity
+        if (array->free_func) {
+            for (size_t i = new_capacity; i < array->size; i++) {
+                if (array->data[i]) {
+                    array->free_func(array->data[i]);
+                }
+            }
+        }
+        array->size = new_capacity;
+    }
+
+    if (PREFIXensure_capacity(array, new_capacity) != 0) {
+        log_fatal("PREFIXresize: out of memory");
+        return -1;
+    }
+
+    // Clear any newly allocated slots
+    for (size_t i = array->capacity; i < new_capacity; i++) {
+        array->data[i] = NULL;
+    }
+    array->capacity = new_capacity;
+    return 0;
+}
+
+// Operations
+void PREFIXforeach(CLASS_NAME *array, CLASS_NAMEApplyFunc apply_func, void *user_data)
+{
+    if (!array || !apply_func) {
+        log_fatal("PREFIXforeach: argument 'array' or 'apply_func' is null");
+        return;
+    }
+
+    for (size_t i = 0; i < array->size; i++) {
+        apply_func(array->data[i], user_data);
+    }
+}
+
+int PREFIXfind(CLASS_NAME *array, ELEMENT_TYPE element, size_t *index)
+{
+    return_val_if_null(array, -1);
+    return_val_if_null(index, -1);
+
+    for (size_t i = 0; i < array->size; i++) {
+        if (array->data[i] == element) {
+            *index = i;
+            return 0;
+        }
+    }
+    return -1;
+}
+
+int PREFIXfind_with_compare(CLASS_NAME *array, const void *data, CLASS_NAMECompareFunc compare_func, size_t *index)
+{
+    return_val_if_null(array, -1);
+    return_val_if_null(data, -1);
+    return_val_if_null(compare_func, -1);
+    return_val_if_null(index, -1);
+
+    for (size_t i = 0; i < array->size; i++) {
+        if (compare_func(array->data[i], data) == 0) {
+            *index = i;
+            return 0;
+        }
+    }
+    return -1;
+}

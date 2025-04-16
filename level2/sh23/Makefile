@@ -1,37 +1,64 @@
+# POSIX-compliant Makefile for building sh23
+
+# Compiler and flags
 CC = gcc
-CFLAGS_EMACS = -fdiagnostics-plain-output
-CFLAGS = $(CFLAGS_EMACS) -Wall -std=c23 -I../c23lib
-OBJS = main.o execute.o variables.o builtins.o parser.o control.o functions.o utils.o tokenizer.o
+CFLAGS = -std=c23 -Wall -Wextra -c
+LDFLAGS =
 
-sh23: $(OBJS)
-	$(CC) $(CFLAGS) -o sh23 $(OBJS)
+# Program name
+PROGRAM = sh23
 
-main.o: main.c execute.h variables.h parser.h builtins.h
-	$(CC) $(CFLAGS) -c main.c
+# Source and object files
+SOURCES = main.c string.c logging.c string_array.c
+OBJECTS = main.o string.o logging.o string_array.o
 
-execute.o: execute.c execute.h builtins.h variables.h
-	$(CC) $(CFLAGS) -c execute.c
+# Generated files
+GEN_HEADERS = string_array.h
+GEN_SOURCES = string_array.c
 
-variables.o: variables.c variables.h execute.h
-	$(CC) $(CFLAGS) -c variables.c
+# Templates
+TEMPLATES = ptr_array.h.in ptr_array.c.in
 
-builtins.o: builtins.c builtins.h variables.h
-	$(CC) $(CFLAGS) -c builtins.c
+# awk script
+AWK_SCRIPT = generate_array.awk
 
-parser.o: parser.c parser.h builtins.h
-	$(CC) $(CFLAGS) -c parser.c
+# Default target
+all: $(PROGRAM)
 
-control.o: control.c control.h
-	$(CC) $(CFLAGS) -c control.c
+# Link object files into executable
+$(PROGRAM): $(OBJECTS)
+	$(CC) $(LDFLAGS) $(OBJECTS) -o $(PROGRAM)
 
-functions.o: functions.c functions.h
-	$(CC) $(CFLAGS) -c functions.c
+# Compile source files to object files
+main.o: main.c string.h string_array.h logging.h
+	$(CC) $(CFLAGS) main.c -o main.o
 
-utils.o: utils.c utils.h
-	$(CC) $(CFLAGS) -c utils.c
+string.o: string.c string.h logging.h
+	$(CC) $(CFLAGS) string.c -o string.o
 
-tokenizer.o: tokenizer.c logging.h
-	$(CC) $(CFLAGS) -c tokenizer.c
+logging.o: logging.c logging.h
+	$(CC) $(CFLAGS) logging.c -o logging.o
 
+string_array.o: string_array.c string_array.h string.h logging.h
+	$(CC) $(CFLAGS) string_array.c -o string_array.o
+
+# Generate string_array.h using awk
+string_array.h: ptr_array.h.in $(AWK_SCRIPT)
+	awk -f $(AWK_SCRIPT) -v CLASS_NAME=StringArray \
+	-v CLASS_NAME_UPPER=STRING_ARRAY_H -v CLASS_NAME_LOWER=string_array \
+	-v ELEMENT_TYPE="String *" -v PREFIX=string_array_ \
+	-v include1="#include \"string.h\"" ptr_array.h.in > string_array.h
+
+# Generate string_array.c using awk
+string_array.c: ptr_array.c.in $(AWK_SCRIPT)
+	awk -f $(AWK_SCRIPT) -v CLASS_NAME=StringArray \
+	-v CLASS_NAME_UPPER=STRING_ARRAY_H -v CLASS_NAME_LOWER=string_array \
+	-v ELEMENT_TYPE="String *" -v PREFIX=string_array_ \
+	-v include1="#include \"string.h\"" ptr_array.c.in > string_array.c
+
+# Clean up generated files, objects, and executable
 clean:
-	rm -f *.o sh23
+	rm -f $(PROGRAM) $(OBJECTS) $(GEN_HEADERS) $(GEN_SOURCES)
+
+# Phony targets
+.PHONY: all clean

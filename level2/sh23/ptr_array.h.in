@@ -1,0 +1,38 @@
+#ifndef CLASS_NAME_UPPER
+#define CLASS_NAME_UPPER
+
+#include <stddef.h>
+/* INCLUDE1 */
+/* INCLUDE2 */
+
+typedef struct CLASS_NAME CLASS_NAME;
+
+// Function pointer types
+typedef void (*CLASS_NAMEFreeFunc)(ELEMENT_TYPE element);
+typedef void (*CLASS_NAMEApplyFunc)(ELEMENT_TYPE element, void *user_data);
+typedef int (*CLASS_NAMECompareFunc)(const ELEMENT_TYPE element, const void *user_data);
+
+// Create and destroy
+CLASS_NAME *PREFIXcreate(void);
+CLASS_NAME *PREFIXcreate_with_free(CLASS_NAMEFreeFunc free_func);
+void PREFIXdestroy(CLASS_NAME *array);
+
+// Accessors
+size_t PREFIXsize(const CLASS_NAME *array);
+size_t PREFIXcapacity(const CLASS_NAME *array);
+ELEMENT_TYPE PREFIXget(const CLASS_NAME *array, size_t index);
+int PREFIXis_empty(const CLASS_NAME *array);
+
+// Modification
+int PREFIXappend(CLASS_NAME *array, ELEMENT_TYPE element);
+int PREFIXset(CLASS_NAME *array, size_t index, ELEMENT_TYPE element);
+int PREFIXremove(CLASS_NAME *array, size_t index);
+int PREFIXclear(CLASS_NAME *array);
+int PREFIXresize(CLASS_NAME *array, size_t new_capacity);
+
+// Operations
+void PREFIXforeach(CLASS_NAME *array, CLASS_NAMEApplyFunc apply_func, void *user_data);
+int PREFIXfind(CLASS_NAME *array, ELEMENT_TYPE element, size_t *index);
+int PREFIXfind_with_compare(CLASS_NAME *array, const void *data, CLASS_NAMECompareFunc compare_func, size_t *index);
+
+#endif
