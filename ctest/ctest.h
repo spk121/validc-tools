@@ -24,6 +24,7 @@ typedef struct {
     CTestFunc func;
     CTestSetupFunc setup;
     CTestSetupFunc teardown;
+    bool xfail; // expected failure
 } CTestEntry;
 
 // Assertion macros
@@ -48,7 +49,30 @@ typedef struct {
     static void name(CTest *ctest); \
     static void name##_setup(CTest *ctest) __attribute__((unused)); \
     static void name##_teardown(CTest *ctest) __attribute__((unused)); \
-    static CTestEntry ctest_entry_##name = { #name, name, name##_setup, name##_teardown }; \
+    static CTestEntry ctest_entry_##name = { #name, name, name##_setup, name##_teardown, false }; \
+    __attribute__((constructor)) static void name##_register(void) { \
+        ctest_register(&ctest_entry_##name); \
+    } \
+    static void name(CTest *ctest)
+
+// Define a test that is expected to fail (XFAIL)
+#define CTEST_XFAIL(name) \
+    static void name(CTest *ctest); \
+    static void name##_setup(CTest *ctest) __attribute__((unused)); \
+    static void name##_teardown(CTest *ctest) __attribute__((unused)); \
+    static CTestEntry ctest_entry_##name = { #name, name, name##_setup, name##_teardown, true }; \
+    __attribute__((constructor)) static void name##_register(void) { \
+        ctest_register(&ctest_entry_##name); \
+    } \
+    static void name(CTest *ctest)
+
+// Test definition without setup/teardown (both are noop)
+static inline void ctest_noop_setup(CTest *ctest) { (void)ctest; }
+static inline void ctest_noop_teardown(CTest *ctest) { (void)ctest; }
+
+#define CTEST_TEST_SIMPLE(name) \
+    static void name(CTest *ctest); \
+    static CTestEntry ctest_entry_##name = { #name, name, ctest_noop_setup, ctest_noop_teardown, false }; \
     __attribute__((constructor)) static void name##_register(void) { \
         ctest_register(&ctest_entry_##name); \
     } \
@@ -57,5 +81,17 @@ typedef struct {
 // Run all tests
 void ctest_run_all(void);
 void ctest_register(CTestEntry *entry);
+
+// Test harness utilities
+// Reset registered tests (for isolated test scenarios)
+void ctest_reset(void);
+
+// Access last run summary (tests_run and tests_failed)
+typedef struct {
+    int tests_run;
+    int tests_failed;
+} CTestSummary;
+
+CTestSummary ctest_last_results(void);
 
 #endif // CTEST_H
