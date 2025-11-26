@@ -78,7 +78,7 @@ CTEST_TEST_SIMPLE(insert_line_long_input) {
     ed.lines = malloc(sizeof(char*));
     ed.lines[0] = strdup("Seed");
     ed.num_lines = 1;
-    ed.current_line = 1;
+    ed.current_line = 0;
 
     size_t long_len = 3000;
     char *line = make_long_line(long_len);
@@ -107,3 +107,4 @@ int main(int argc, char **argv) {
     ctest_run_all();
     return 0;
 }
+

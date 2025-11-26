@@ -18,7 +18,7 @@ CTEST_TEST_SIMPLE(print_line_invalid_addresses) {
     ed.lines = malloc(1 * sizeof(char*));
     ed.lines[0] = strdup("Line 1");
     ed.num_lines = 1;
-    ed.current_line = 1;
+    ed.current_line = 0;
     
     // Valid address should work (we can't easily test stdout)
     print_line(&ed, 0);  // Valid
@@ -46,7 +46,7 @@ CTEST_TEST_SIMPLE(delete_line_invalid_addresses) {
     ed.lines[1] = strdup("Line 2");
     ed.lines[2] = strdup("Line 3");
     ed.num_lines = 3;
-    ed.current_line = 2;
+    ed.current_line = 1;
     
     // Invalid addresses should not delete anything
     delete_line(&ed, -1);
@@ -85,10 +85,10 @@ CTEST_TEST_SIMPLE(parse_address_validation_empty_buffer) {
     CTEST_ASSERT_EQ(addr, -1, "$ is -1 for empty buffer");
     
     addr = parse_address(&ed, ".");
-    CTEST_ASSERT_EQ(addr, 0, ". is 0 for empty buffer");
+    CTEST_ASSERT_EQ(addr, -1, ". is invalid for empty buffer");
     
     addr = parse_address(&ed, "");
-    CTEST_ASSERT_EQ(addr, 0, "empty address is 0 for empty buffer");
+    CTEST_ASSERT_EQ(addr, -1, "empty address is invalid (undefined) for empty buffer");
     
     free_editor(&ed);
 }
@@ -104,7 +104,7 @@ CTEST_TEST_SIMPLE(parse_address_validation_commands) {
     ed.lines[1] = strdup("Line 2");
     ed.lines[2] = strdup("Line 3");
     ed.num_lines = 3;
-    ed.current_line = 2;
+    ed.current_line = 1;
     
     int addr;
     
@@ -130,9 +130,12 @@ CTEST_TEST_SIMPLE(parse_address_validation_commands) {
     CTEST_ASSERT_EQ(addr, -1, "line 4 is invalid");
     CTEST_ASSERT_FALSE(addr >= 0 && addr < ed.num_lines, "address out of range");
     
+    // Relative offset: "-1" means current - 1
+    // With current_line = 1 (line 2), "-1" should give line 1 (0-based: 0)
+    ed.current_line = 1;
     addr = parse_address(&ed, "-1");
-    CTEST_ASSERT_EQ(addr, -1, "negative line is invalid");
-    CTEST_ASSERT_FALSE(addr >= 0 && addr < ed.num_lines, "address out of range");
+    CTEST_ASSERT_EQ(addr, 0, "-1 from line 2 should give line 1 (0-based: 0)");
+    CTEST_ASSERT_TRUE(addr >= 0 && addr < ed.num_lines, "-1 is valid relative address");
     
     free_editor(&ed);
 }
@@ -155,7 +158,7 @@ CTEST_TEST_SIMPLE(append_insert_address_validation) {
     ed.lines[0] = strdup("Line 1");
     ed.lines[1] = strdup("Line 2");
     ed.num_lines = 2;
-    ed.current_line = 1;
+    ed.current_line = 0;
     
     // For append with non-empty buffer
     addr = parse_address(&ed, "1");
@@ -187,7 +190,7 @@ CTEST_TEST_SIMPLE(address_validation_boundaries) {
         ed.lines[i] = strdup(buf);
     }
     ed.num_lines = 5;
-    ed.current_line = 3;
+    ed.current_line = 2;
     
     int addr;
     
@@ -229,14 +232,14 @@ CTEST_TEST_SIMPLE(current_line_after_operations) {
     ed.lines[1] = strdup("Line 2");
     ed.lines[2] = strdup("Line 3");
     ed.num_lines = 3;
-    ed.current_line = 1;
+    ed.current_line = 0;
     
     // Print updates current line
     print_line(&ed, 1);  // Print line 2 (0-based: 1)
-    CTEST_ASSERT_EQ(ed.current_line, 2, "current line should be 2 after printing line 2");
+    CTEST_ASSERT_EQ(ed.current_line, 1, "current line should be 2 after printing line 2");
     
     print_line(&ed, 2);  // Print line 3 (0-based: 2)
-    CTEST_ASSERT_EQ(ed.current_line, 3, "current line should be 3 after printing line 3");
+    CTEST_ASSERT_EQ(ed.current_line, 2, "current line should be 3 after printing line 3");
     
     // Using "." should now give line 3
     int addr = parse_address(&ed, ".");
@@ -261,7 +264,7 @@ CTEST_TEST_SIMPLE(bare_address_validation) {
     ed.lines[1] = strdup("Line 2");
     ed.lines[2] = strdup("Line 3");
     ed.num_lines = 3;
-    ed.current_line = 1;
+    ed.current_line = 0;
     
     // Valid bare address
     addr = parse_address(&ed, "2");
@@ -286,3 +289,5 @@ int main(int argc, char **argv) {
     ctest_run_all();
     return 0;
 }
+
+

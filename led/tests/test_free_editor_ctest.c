@@ -14,7 +14,7 @@ CTEST_TEST_SIMPLE(free_editor_resets_fields) {
     CTEST_ASSERT_NOT_NULL(ed.lines[0], "alloc line 0");
     strcpy(ed.lines[0], "X");
     ed.num_lines = 1;
-    ed.current_line = 1;
+    ed.current_line = 0;
     ed.dirty = 1;
     ed.filename = (char*)malloc(10);
     CTEST_ASSERT_NOT_NULL(ed.filename, "alloc filename");
@@ -38,3 +38,4 @@ CTEST_TEST_SIMPLE(free_editor_resets_fields) {
 }
 
 int main(void) { ctest_run_all(); return 0; }
+

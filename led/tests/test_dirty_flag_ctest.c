@@ -62,7 +62,7 @@ CTEST_TEST_SIMPLE(dirty_flag_append_no_lines) {
     ed.lines = malloc(1 * sizeof(char*));
     ed.lines[0] = strdup("Existing line");
     ed.num_lines = 1;
-    ed.current_line = 1;
+    ed.current_line = 0;
     ed.dirty = 0;  // Mark as clean (as if just loaded)
     
     // Simulate append with no lines entered (user just types '.')
@@ -220,3 +220,4 @@ int main(int argc, char **argv) {
     ctest_run_all();
     return 0;
 }
+

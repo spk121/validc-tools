@@ -1,0 +1,7 @@
+MATCHED APPLE LINE
+banana
+cherry
+MATCHED APPLE LINE
+grape
+MATCHED APPLE LINE
+orange

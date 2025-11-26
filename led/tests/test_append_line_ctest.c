@@ -42,7 +42,7 @@ CTEST_TEST_SIMPLE(append_after_address) {
     ed.lines[1] = dup_cstr("B");
     ed.lines[2] = dup_cstr("C");
     ed.num_lines = 3;
-    ed.current_line = 3;
+    ed.current_line = 2;
 
     feed_stdin("X1\nX2\n.\n");
     append_line(&ed, 0);
@@ -65,7 +65,7 @@ CTEST_TEST_SIMPLE(append_at_end) {
     ed.lines[0] = dup_cstr("L1");
     ed.lines[1] = dup_cstr("L2");
     ed.num_lines = 2;
-    ed.current_line = 2;
+    ed.current_line = 1;
 
     feed_stdin("N1\nN2\n.\n");
     append_line(&ed, 1);
@@ -106,14 +106,14 @@ CTEST_TEST_SIMPLE(append_no_input_address_unchanged) {
     ed.lines[0] = dup_cstr("Line1");
     ed.lines[1] = dup_cstr("Line2");
     ed.num_lines = 2;
-    ed.current_line = 2; // current address is line 2
+    ed.current_line = 1; // current address is line 2
 
     // Simulate address 1 append (after first line) but no input (just '.')
     feed_stdin(".\n");
     append_line(&ed, 0); // address index 0 (line 1)
 
     CTEST_ASSERT_EQ(ed.num_lines, 2, "num_lines unchanged");
-    CTEST_ASSERT_EQ(ed.current_line, 2, "current_line unchanged per POSIX ed");
+    CTEST_ASSERT_EQ(ed.current_line, 1, "current_line unchanged per POSIX ed");
 
     free_editor(&ed);
 }
@@ -125,7 +125,7 @@ CTEST_TEST_SIMPLE(insert_no_input_address_unchanged) {
     ed.lines[0] = dup_cstr("A");
     ed.lines[1] = dup_cstr("B");
     ed.num_lines = 2;
-    ed.current_line = 1; // current address is line 1
+    ed.current_line = 0; // current address is line 1
 
     // Simulate insert before second line (address index 1) but no input
     feed_stdin(".\n");
@@ -136,3 +136,4 @@ CTEST_TEST_SIMPLE(insert_no_input_address_unchanged) {
 
     free_editor(&ed);
 }
+

@@ -9,13 +9,13 @@ CTEST_TEST_SIMPLE(parse_address_empty_buffer) {
     Editor ed;
     init_editor(&ed);
     
-    // Empty string should return 0 for empty buffer
+    // Empty string should return undefined (-1) for empty buffer
     int addr = parse_address(&ed, "");
-    CTEST_ASSERT_EQ(addr, 0, "empty address with empty buffer should be 0");
+    CTEST_ASSERT_EQ(addr, -1, "empty address with empty buffer should be -1");
     
-    // "." (current line) should return 0 for empty buffer
+    // "." (current line) should be invalid for empty buffer
     addr = parse_address(&ed, ".");
-    CTEST_ASSERT_EQ(addr, 0, "current line with empty buffer should be 0");
+    CTEST_ASSERT_EQ(addr, -1, "current line with empty buffer should be invalid");
     
     // "$" (last line) should return -1 for empty buffer
     addr = parse_address(&ed, "$");
@@ -37,7 +37,7 @@ CTEST_TEST_SIMPLE(parse_address_single_line) {
     ed.lines = malloc(1 * sizeof(char*));
     ed.lines[0] = strdup("Line 1");
     ed.num_lines = 1;
-    ed.current_line = 1;
+    ed.current_line = 0;
     
     // Empty string should return current line (0-based: 0)
     int addr = parse_address(&ed, "");
@@ -77,7 +77,7 @@ CTEST_TEST_SIMPLE(parse_address_multiple_lines) {
     ed.lines[1] = strdup("Line 2");
     ed.lines[2] = strdup("Line 3");
     ed.num_lines = 3;
-    ed.current_line = 2;  // Current is line 2
+    ed.current_line = 1;  // Current is line 2
     
     // Empty string should return current line (0-based: 1)
     int addr = parse_address(&ed, "");
@@ -111,9 +111,11 @@ CTEST_TEST_SIMPLE(parse_address_multiple_lines) {
     addr = parse_address(&ed, "0");
     CTEST_ASSERT_EQ(addr, -1, "line 0 should be invalid");
     
-    // Negative numbers should be invalid
+    // Relative negative offset: "-1" means current - 1
+    // With current_line = 2 (line 3), "-1" should give line 2 (0-based: 1)
+    ed.current_line = 2;
     addr = parse_address(&ed, "-1");
-    CTEST_ASSERT_EQ(addr, -1, "negative line should be invalid");
+    CTEST_ASSERT_EQ(addr, 1, "-1 from line 3 should give line 2 (0-based: 1)");
     
     free_editor(&ed);
 }
@@ -133,17 +135,17 @@ CTEST_TEST_SIMPLE(parse_address_current_line_positions) {
     ed.num_lines = 5;
     
     // Test with current_line = 1 (first line)
-    ed.current_line = 1;
+    ed.current_line = 0;
     int addr = parse_address(&ed, ".");
     CTEST_ASSERT_EQ(addr, 0, "current line 1 should be 0");
     
     // Test with current_line = 3 (middle line)
-    ed.current_line = 3;
+    ed.current_line = 2;
     addr = parse_address(&ed, ".");
     CTEST_ASSERT_EQ(addr, 2, "current line 3 should be 2");
     
     // Test with current_line = 5 (last line)
-    ed.current_line = 5;
+    ed.current_line = 4;
     addr = parse_address(&ed, ".");
     CTEST_ASSERT_EQ(addr, 4, "current line 5 should be 4");
     
@@ -159,7 +161,7 @@ CTEST_TEST_SIMPLE(parse_address_null) {
     ed.lines = malloc(1 * sizeof(char*));
     ed.lines[0] = strdup("Line 1");
     ed.num_lines = 1;
-    ed.current_line = 1;
+    ed.current_line = 0;
     
     // NULL should behave like empty string
     int addr = parse_address(&ed, NULL);
@@ -179,7 +181,7 @@ CTEST_TEST_SIMPLE(parse_address_invalid_formats) {
     ed.lines[1] = strdup("Line 2");
     ed.lines[2] = strdup("Line 3");
     ed.num_lines = 3;
-    ed.current_line = 2;
+    ed.current_line = 1;
     
     // Non-numeric, non-special strings should be treated as 0 by atoi
     // atoi("abc") returns 0, which is invalid
@@ -199,3 +201,4 @@ int main(int argc, char **argv) {
     ctest_run_all();
     return 0;
 }
+

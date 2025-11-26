@@ -38,3 +38,4 @@ CTEST_TEST_SIMPLE(last_error_updates_each_failure) {
 }
 
 int main(void) { ctest_run_all(); return 0; }
+
