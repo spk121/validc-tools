@@ -1,6 +1,4 @@
-// Patch: Fix group capture length regression by distinguishing group span from total match length.
-// Adds prefix_out parameter to match_repeated so groups record only the repeated group's span, not including the
-// remainder.
+// Expand BreResult to differentiate group presence vs mismatch, and use it in match_group and match_here.
 
 #include "bre.h"
 #include <ctype.h>
@@ -11,19 +9,21 @@
 
 #define RE_DUP_MAX 255
 
-static BreResult match_here(MatchContext *ctx, BreMatch *m, int *group_id, int *total_out);
+static BreResult match_here(MatchContext *ctx, BreMatch *m, int *total_out);
 static bool in_char_class(unsigned char c, const char *pat, int pi, int pend, int *after);
 static int find_group_end(const char *pat, int pi, int pend);
 
 typedef BreResult (*AtomOnceFn)(MatchContext *ctx, int atom_start, int atom_end, int tpos, int *adv_out);
 
-/* ---------- Helpers ---------- */
+/* Helpers */
 
 static int find_group_end(const char *pat, int pi, int pend)
 {
     for (int i = pi + 2; i < pend - 1; i++)
+    {
         if (pat[i] == '\\' && pat[i + 1] == ')')
             return i;
+    }
     return -1;
 }
 
@@ -65,9 +65,9 @@ static bool in_char_class(unsigned char c, const char *pat, int pi, int pend, in
     return invert ? !matched : matched;
 }
 
-/* ---------- Quantifiers ---------- */
+/* Quantifiers */
 
-BreResult parse_bre_repetition(const char *pat, int pi, int pend, int *min_rep, int *max_rep, int *next_pi)
+BreResult parse_bre_repetition(const char *pat, int pi, int pend, BreRepetition *rep)
 {
     if (pi + 5 > pend)
     {
@@ -80,13 +80,12 @@ BreResult parse_bre_repetition(const char *pat, int pi, int pend, int *min_rep, 
 
     int j = pi + 2;
     const char *start = pat + j;
-
     if (j >= pend || !isdigit((unsigned char)pat[j]))
         return BRE_ERROR;
     while (j < pend && isdigit((unsigned char)pat[j]))
         j++;
-    *min_rep = atoi(start);
-    if (*min_rep > RE_DUP_MAX)
+    rep->min = atoi(start);
+    if (rep->min > RE_DUP_MAX)
         return BRE_ERROR;
 
     if (j >= pend)
@@ -94,8 +93,8 @@ BreResult parse_bre_repetition(const char *pat, int pi, int pend, int *min_rep, 
 
     if (pat[j] == '\\' && j + 1 < pend && pat[j + 1] == '}')
     {
-        *max_rep = *min_rep;
-        *next_pi = j + 2;
+        rep->max = rep->min;
+        rep->next_pi = j + 2;
         return BRE_OK;
     }
 
@@ -107,8 +106,8 @@ BreResult parse_bre_repetition(const char *pat, int pi, int pend, int *min_rep, 
 
     if (pat[j] == '\\' && j + 1 < pend && pat[j + 1] == '}')
     {
-        *max_rep = -1;
-        *next_pi = j + 2;
+        rep->max = -1;
+        rep->next_pi = j + 2;
         return BRE_OK;
     }
 
@@ -117,36 +116,36 @@ BreResult parse_bre_repetition(const char *pat, int pi, int pend, int *min_rep, 
         return BRE_ERROR;
     while (j < pend && isdigit((unsigned char)pat[j]))
         j++;
-    *max_rep = atoi(start);
-    if (*max_rep > RE_DUP_MAX || *min_rep > *max_rep)
+    rep->max = atoi(start);
+    if (rep->max > RE_DUP_MAX || rep->min > rep->max)
         return BRE_ERROR;
     if (j + 1 >= pend || pat[j] != '\\' || pat[j + 1] != '}')
         return BRE_ERROR;
 
-    *next_pi = j + 2;
+    rep->next_pi = j + 2;
     return BRE_OK;
 }
 
-static BreResult parse_quantifier(const char *pat, int at, int pend, int *min, int *max, int *next_pi)
+static BreResult parse_quantifier(const char *pat, int at, int pend, BreRepetition *rep)
 {
     if (at < pend && pat[at] == '*')
     {
-        *min = 0;
-        *max = -1;
-        *next_pi = at + 1;
+        rep->min = 0;
+        rep->max = -1;
+        rep->next_pi = at + 1;
         return BRE_OK;
     }
     if (at + 1 < pend && pat[at] == '\\' && pat[at + 1] == '+')
     {
-        *min = 1;
-        *max = -1;
-        *next_pi = at + 2;
+        rep->min = 1;
+        rep->max = -1;
+        rep->next_pi = at + 2;
         return BRE_OK;
     }
-    return parse_bre_repetition(pat, at, pend, min, max, next_pi);
+    return parse_bre_repetition(pat, at, pend, rep);
 }
 
-/* ---------- Atom Once Implementations ---------- */
+/* Atom Once */
 
 static BreResult once_literal(MatchContext *ctx, int atom_start, int atom_end, int tpos, int *adv_out)
 {
@@ -197,15 +196,14 @@ static BreResult once_class(MatchContext *ctx, int atom_start, int atom_end, int
     return BRE_OK;
 }
 
-/* ---------- Repetition with exact backtracking ----------
-   Added prefix_out to report the span consumed by the repeated atom(s) (before remainder).
-*/
-static BreResult match_repeated(MatchContext *ctx, AtomOnceFn atom_once, int atom_start, int atom_end, int min_rep,
-                                int max_rep, int next_pi, BreMatch *m, int *group_id, int *total_out, int *prefix_out)
+/* Repetition with exact backtracking (prefix_out reports span of repeated atoms) */
+
+static BreResult match_repeated(MatchContext *ctx, AtomOnceFn atom_once, int atom_start, int atom_end,
+                                const BreRepetition *rep, BreMatch *m, int *total_out, int *prefix_out)
 {
     (void)m;
     int tpos = ctx->ti;
-    int max_possible = (max_rep < 0) ? 10000 : max_rep;
+    int max_possible = (rep->max < 0) ? 10000 : rep->max;
     int advs[256];
     int have = 0;
 
@@ -223,14 +221,13 @@ static BreResult match_repeated(MatchContext *ctx, AtomOnceFn atom_once, int ato
         have++;
     }
 
-    while (have >= min_rep)
+    while (have >= rep->min)
     {
         MatchContext rest_ctx = *ctx;
         rest_ctx.ti = tpos;
-        rest_ctx.pi = next_pi;
-
+        rest_ctx.pi = rep->next_pi;
         int rest_total = 0;
-        BreResult rr = match_here(&rest_ctx, m, group_id, &rest_total);
+        BreResult rr = match_here(&rest_ctx, m, &rest_total);
         if (rr == BRE_ERROR)
             return BRE_ERROR;
         if (rr == BRE_OK)
@@ -249,105 +246,156 @@ static BreResult match_repeated(MatchContext *ctx, AtomOnceFn atom_once, int ato
     return BRE_NOMATCH;
 }
 
-/* ---------- Group Handling ---------- */
+/* Group Handling */
 
 static BreResult once_group_inner(MatchContext *ctx, int inner_start, int inner_end, int tpos, BreMatch *m,
-                                  int *group_id, int *adv_out)
+                                  int *adv_out)
 {
     MatchContext inner = *ctx;
     inner.ti = tpos;
     inner.pi = inner_start;
     inner.pend = inner_end;
-    int gid_tmp = group_id ? *group_id : 0;
     int consumed = 0;
-    BreResult r = match_here(&inner, m, &gid_tmp, &consumed);
+    BreResult r = match_here(&inner, m, &consumed);
     if (r != BRE_OK)
         return r;
     *adv_out = consumed;
     return BRE_OK;
 }
 
-static BreResult match_group(MatchContext *ctx, BreMatch *m, int *group_id, int *total_out, bool *applied_out)
+/* Match a group with no group-level quantifier.
+   - \(.*\) gets greedy outer backtracking.
+   - Otherwise, match inner once, then match the remainder.
+   - Record capture only after success; consume the group number. */
+BreResult match_group_without_quantifier(MatchContext *ctx, BreMatch *m, int inner_start, int inner_end, int atom_end,
+                                         int *total_out)
 {
-    *applied_out = false;
-    if (!(ctx->pat[ctx->pi] == '\\' && ctx->pi + 1 < ctx->pend && ctx->pat[ctx->pi + 1] == '('))
-        return BRE_NOMATCH;
-
-    int gend = find_group_end(ctx->pat, ctx->pi, ctx->pend);
-    if (gend < 0)
-        return BRE_ERROR;
-
-    int gid_orig = group_id ? *group_id : 0;
-    int group_no = gid_orig + 1;
-    int gidx = group_no - 1;
-
-    int atom_end = gend + 2;
-    int inner_start = ctx->pi + 2;
-    int inner_end = gend;
-
-    int min_rep = 1, max_rep = 1, next_pi = atom_end;
-    BreResult qres = parse_quantifier(ctx->pat, atom_end, ctx->pend, &min_rep, &max_rep, &next_pi);
-    if (qres == BRE_ERROR)
-        return BRE_ERROR;
-
-    /* Special-case \(.*\) without quantifier for outer backtracking */
-    if (qres == BRE_NOMATCH && inner_end - inner_start == 2 && ctx->pat[inner_start] == '.' &&
-        ctx->pat[inner_start + 1] == '*')
+    /* Special-case \(.*\) to backtrack against the remainder */
+    if (inner_end - inner_start == 2 && ctx->pat[inner_start] == '.' && ctx->pat[inner_start + 1] == '*')
     {
         int tcur = ctx->ti;
         while (ctx->text[tcur])
             tcur++;
+
         for (int ttry = tcur; ttry >= ctx->ti; --ttry)
         {
             MatchContext rest_ctx = *ctx;
             rest_ctx.ti = ttry;
             rest_ctx.pi = atom_end;
+
             int rest_total = 0;
-            BreResult rr = match_here(&rest_ctx, m, group_id, &rest_total);
+            BreResult rr = match_here(&rest_ctx, m, &rest_total);
             if (rr == BRE_ERROR)
                 return BRE_ERROR;
             if (rr == BRE_OK)
             {
-                m->groups[gidx].start = ctx->ti;
-                m->groups[gidx].length = ttry - ctx->ti;
-                if (group_no > m->num_groups)
-                    m->num_groups = group_no;
-                if (group_id)
-                    *group_id = gid_orig + 1;
-                *total_out = (ttry - ctx->ti) + rest_total;
-                *applied_out = true;
-                return BRE_OK;
+                if (m->num_groups < BRE_MAX_GROUPS)
+                {
+                    m->groups[m->num_groups].start = ctx->ti;
+                    m->groups[m->num_groups].length = ttry - ctx->ti;
+                    m->num_groups++;
+                    *total_out = (ttry - ctx->ti) + rest_total;
+                    ctx->pi = atom_end;
+                    return BRE_OK;
+                }
             }
         }
         return BRE_NOMATCH;
     }
 
-    /* General path: repetition on inner or single occurrence */
+    /* General case: scan forward in text, try inner once at each position, then the remainder */
+    for (int tpos = ctx->ti;; tpos++)
+    {
+        if (ctx->text[tpos] == '\0')
+            break;
+
+        int adv = 0;
+        BreResult ir = once_group_inner(ctx, inner_start, inner_end, tpos, m, &adv);
+        if (ir == BRE_ERROR)
+            return BRE_ERROR;
+        if (ir != BRE_OK)
+            continue;
+
+        MatchContext rest_ctx = *ctx;
+        rest_ctx.ti = tpos + adv;
+        rest_ctx.pi = atom_end;
+
+        int rest_total = 0;
+        BreResult rr = match_here(&rest_ctx, m, &rest_total);
+        if (rr == BRE_ERROR)
+            return BRE_ERROR;
+        if (rr == BRE_OK)
+        {
+            if (m->num_groups < BRE_MAX_GROUPS)
+            {
+                m->groups[m->num_groups].start = tpos;
+                m->groups[m->num_groups].length = adv;
+                m->num_groups++;
+            }
+
+            *total_out = (tpos - ctx->ti) + adv + rest_total;
+            ctx->pi = atom_end;
+            return BRE_OK;
+        }
+    }
+
+    return BRE_NOMATCH;
+}
+
+/* Match a group with a group-level quantifier. Uses repetition and records the
+   capture as the span of all repeated inner occurrences. */
+BreResult match_group_with_quantifier(MatchContext *ctx, BreMatch *m, int inner_start, int inner_end, int atom_start,
+                                      int atom_end, const BreRepetition *rep, int *total_out)
+{
+    /* Adapter for match_repeated; do not mutate caller’s group_id during speculative inner matches */
     BreResult inner_once_adapter(MatchContext * c, int astart, int aend, int tpos, int *adv_out)
     {
         (void)astart;
         (void)aend;
-        return once_group_inner(c, inner_start, inner_end, tpos, m, group_id, adv_out);
+        return once_group_inner(c, inner_start, inner_end, tpos, m, adv_out);
     }
 
-    int total = 0, group_span = 0;
-    BreResult mr = match_repeated(ctx, inner_once_adapter, ctx->pi, atom_end, min_rep, max_rep, next_pi, m, group_id,
-                                  &total, &group_span);
+    int total = 0;
+    int group_span = 0;
+    BreResult mr = match_repeated(ctx, inner_once_adapter, atom_start, atom_end, rep, m, &total, &group_span);
     if (mr != BRE_OK)
-        return mr;
+        return mr; /* BRE_NOMATCH or BRE_ERROR */
 
-    m->groups[gidx].start = ctx->ti;
-    m->groups[gidx].length = group_span;
-    if (group_no > m->num_groups)
-        m->num_groups = group_no;
-    if (group_id)
-        *group_id = gid_orig + 1;
+    if (m->num_groups < BRE_MAX_GROUPS)
+    {
+        m->groups[m->num_groups].start = ctx->ti;
+        m->groups[m->num_groups].length = group_span;
+        m->num_groups++;
+    }
     *total_out = total;
-    *applied_out = true;
+    ctx->pi = atom_end;
+
     return BRE_OK;
 }
 
-/* ---------- Core Dispatcher ---------- */
+/* Dispatcher: determine group bounds, check for quantifier, then call the specific handler. */
+BreResult match_group(MatchContext *ctx, BreMatch *m, int *total_out)
+{
+    int gend = find_group_end(ctx->pat, ctx->pi, ctx->pend);
+    if (gend < 0)
+        return BRE_ERROR;
+
+    int atom_start = ctx->pi;
+    int atom_end = gend + 2;
+    int inner_start = ctx->pi + 2;
+    int inner_end = gend;
+
+    BreRepetition rep = {.min = 1, .max = 1, .next_pi = atom_end};
+    BreResult qres = parse_quantifier(ctx->pat, atom_end, ctx->pend, &rep);
+    if (qres == BRE_ERROR)
+        return BRE_ERROR;
+    if (qres == BRE_NOMATCH)
+    {
+        return match_group_without_quantifier(ctx, m, inner_start, inner_end, atom_end, total_out);
+    }
+    return match_group_with_quantifier(ctx, m, inner_start, inner_end, atom_start, atom_end, &rep, total_out);
+}
+/* Dispatcher */
 
 static int find_class_end_simple(const char *pat, int pi, int pend)
 {
@@ -360,7 +408,7 @@ static int find_class_end_simple(const char *pat, int pi, int pend)
     return -1;
 }
 
-static BreResult match_here(MatchContext *ctx, BreMatch *m, int *group_id, int *total_out)
+static BreResult match_here(MatchContext *ctx, BreMatch *m, int *total_out)
 {
     if (ctx->pi >= ctx->pend)
     {
@@ -378,18 +426,20 @@ static BreResult match_here(MatchContext *ctx, BreMatch *m, int *group_id, int *
         return BRE_NOMATCH;
     }
 
-    /* Group */
+    /* If next atom is a group, treat group as the applicable atom and do not fall through */
+    if (ctx->pat[ctx->pi] == '\\' && ctx->pi + 1 < ctx->pend && ctx->pat[ctx->pi + 1] == '(')
     {
-        bool applied = false;
         int consumed = 0;
-        BreResult gr = match_group(ctx, m, group_id, &consumed, &applied);
-        if (gr == BRE_ERROR)
-            return BRE_ERROR;
-        if (applied)
+        BreResult gr = match_group(ctx, m, &consumed);
+        if (gr == BRE_OK)
         {
             *total_out = consumed;
             return BRE_OK;
         }
+        /* Important: group present but mismatch → BRE_NOMATCH for this position */
+        if (gr == BRE_NOMATCH)
+            return BRE_NOMATCH;
+        return gr; /* BRE_ERROR */
     }
 
     /* Class */
@@ -399,13 +449,12 @@ static BreResult match_here(MatchContext *ctx, BreMatch *m, int *group_id, int *
         int atom_end = find_class_end_simple(ctx->pat, atom_start, ctx->pend);
         if (atom_end < 0)
             return BRE_ERROR;
-        int min_rep = 1, max_rep = 1, next_pi = atom_end;
-        BreResult qr = parse_quantifier(ctx->pat, atom_end, ctx->pend, &min_rep, &max_rep, &next_pi);
+        BreRepetition rep = {.min = 1, .max = 1, .next_pi = atom_end};
+        BreResult qr = parse_quantifier(ctx->pat, atom_end, ctx->pend, &rep);
         if (qr == BRE_ERROR)
             return BRE_ERROR;
         int total = 0;
-        BreResult rr =
-            match_repeated(ctx, once_class, atom_start, atom_end, min_rep, max_rep, next_pi, m, group_id, &total, NULL);
+        BreResult rr = match_repeated(ctx, once_class, atom_start, atom_end, &rep, m, &total, NULL);
         if (rr != BRE_OK)
             return rr;
         *total_out = total;
@@ -416,13 +465,12 @@ static BreResult match_here(MatchContext *ctx, BreMatch *m, int *group_id, int *
     if (ctx->pat[ctx->pi] == '.')
     {
         int atom_start = ctx->pi, atom_end = ctx->pi + 1;
-        int min_rep = 1, max_rep = 1, next_pi = atom_end;
-        BreResult qr = parse_quantifier(ctx->pat, atom_end, ctx->pend, &min_rep, &max_rep, &next_pi);
+        BreRepetition rep = {.min = 1, .max = 1, .next_pi = atom_end};
+        BreResult qr = parse_quantifier(ctx->pat, atom_end, ctx->pend, &rep);
         if (qr == BRE_ERROR)
             return BRE_ERROR;
         int total = 0;
-        BreResult rr =
-            match_repeated(ctx, once_dot, atom_start, atom_end, min_rep, max_rep, next_pi, m, group_id, &total, NULL);
+        BreResult rr = match_repeated(ctx, once_dot, atom_start, atom_end, &rep, m, &total, NULL);
         if (rr != BRE_OK)
             return rr;
         *total_out = total;
@@ -436,17 +484,16 @@ static BreResult match_here(MatchContext *ctx, BreMatch *m, int *group_id, int *
             return BRE_ERROR;
         char esc = ctx->pat[ctx->pi + 1];
         if (esc == '(')
-            return BRE_ERROR; /* Should have matched group */
+            return BRE_ERROR; /* group already handled */
         if (esc == ')' || esc == '{' || esc == '}')
             return BRE_ERROR;
         int atom_start = ctx->pi, atom_end = ctx->pi + 2;
-        int min_rep = 1, max_rep = 1, next_pi = atom_end;
-        BreResult qr = parse_quantifier(ctx->pat, atom_end, ctx->pend, &min_rep, &max_rep, &next_pi);
+        BreRepetition rep = {.min = 1, .max = 1, .next_pi = atom_end};
+        BreResult qr = parse_quantifier(ctx->pat, atom_end, ctx->pend, &rep);
         if (qr == BRE_ERROR)
             return BRE_ERROR;
         int total = 0;
-        BreResult rr = match_repeated(ctx, once_escape, atom_start, atom_end, min_rep, max_rep, next_pi, m, group_id,
-                                      &total, NULL);
+        BreResult rr = match_repeated(ctx, once_escape, atom_start, atom_end, &rep, m, &total, NULL);
         if (rr != BRE_OK)
             return rr;
         *total_out = total;
@@ -456,13 +503,12 @@ static BreResult match_here(MatchContext *ctx, BreMatch *m, int *group_id, int *
     /* Literal */
     {
         int atom_start = ctx->pi, atom_end = ctx->pi + 1;
-        int min_rep = 1, max_rep = 1, next_pi = atom_end;
-        BreResult qr = parse_quantifier(ctx->pat, atom_end, ctx->pend, &min_rep, &max_rep, &next_pi);
+        BreRepetition rep = {.min = 1, .max = 1, .next_pi = atom_end};
+        BreResult qr = parse_quantifier(ctx->pat, atom_end, ctx->pend, &rep);
         if (qr == BRE_ERROR)
             return BRE_ERROR;
         int total = 0;
-        BreResult rr = match_repeated(ctx, once_literal, atom_start, atom_end, min_rep, max_rep, next_pi, m, group_id,
-                                      &total, NULL);
+        BreResult rr = match_repeated(ctx, once_literal, atom_start, atom_end, &rep, m, &total, NULL);
         if (rr != BRE_OK)
             return rr;
         *total_out = total;
@@ -470,8 +516,45 @@ static BreResult match_here(MatchContext *ctx, BreMatch *m, int *group_id, int *
     }
 }
 
-/* ---------- Public API ---------- */
+/* Sort captured groups in BreMatch by ascending start index.
+   - Only the first match->num_groups entries are considered.
+   - Groups with start < 0 (unset) are placed at the end.
+*/
+static void bre_sort_groups_by_start(BreMatch *match)
+{
+    if (!match || match->num_groups <= 1)
+        return;
 
+    int n = match->num_groups;
+
+    // Simple stable insertion sort by start (treat -1 as +infinity)
+    for (int i = 1; i < n; i++)
+    {
+        int s = match->groups[i].start;
+        int l = match->groups[i].length;
+
+        // Map -1 to a large value so unset groups go to the end
+        int key = (s < 0) ? INT_MAX : s;
+
+        int j = i - 1;
+        while (j >= 0)
+        {
+            int js = match->groups[j].start;
+            int jkey = (js < 0) ? INT_MAX : js;
+
+            if (jkey <= key)
+                break;
+
+            match->groups[j + 1].start = match->groups[j].start;
+            match->groups[j + 1].length = match->groups[j].length;
+            j--;
+        }
+        match->groups[j + 1].start = s;
+        match->groups[j + 1].length = l;
+    }
+}
+
+/* Public API */
 BreResult bre_match(const char *text, const char *pattern, BreMatch *match)
 {
     if (!text || !pattern || !match)
@@ -490,16 +573,19 @@ BreResult bre_match(const char *text, const char *pattern, BreMatch *match)
     bool anchored_start = (plen > 0 && pattern[0] == '^');
     int start_pi = anchored_start ? 1 : 0;
 
-    MatchContext ctx = {.base = text, .text = text, .ti = 0, .pat = pattern, .pi = start_pi, .pend = plen};
+    // Base context template (pattern indices constant)
+    MatchContext base = {.base = text, .text = text, .ti = 0, .pat = pattern, .pi = start_pi, .pend = plen};
 
     if (anchored_start)
     {
-        int gid = 0, consumed = 0;
-        BreResult r = match_here(&ctx, match, &gid, &consumed);
+        MatchContext ctx = base;
+        int consumed = 0;
+        BreResult r = match_here(&ctx, match, &consumed);
         if (r == BRE_OK)
         {
             match->start = 0;
             match->length = consumed;
+            bre_sort_groups_by_start(match);
         }
         return r;
     }
@@ -507,23 +593,29 @@ BreResult bre_match(const char *text, const char *pattern, BreMatch *match)
     int tlen = (int)strlen(text);
     for (int s = 0; s <= tlen; s++)
     {
+        // Reset groups each try
         match->num_groups = 0;
         for (int i = 0; i < BRE_MAX_GROUPS; i++)
         {
             match->groups[i].start = -1;
             match->groups[i].length = 0;
         }
-        int gid = 0, consumed = 0;
+
+        MatchContext ctx = base; // fresh copy
         ctx.ti = s;
-        BreResult r = match_here(&ctx, match, &gid, &consumed);
+
+        int consumed = 0;
+        BreResult r = match_here(&ctx, match, &consumed);
         if (r == BRE_ERROR)
             return BRE_ERROR;
         if (r == BRE_OK)
         {
             match->start = s;
             match->length = consumed;
+            bre_sort_groups_by_start(match);
             return BRE_OK;
         }
+        // else BRE_NOMATCH → try next s
     }
     return BRE_NOMATCH;
 }

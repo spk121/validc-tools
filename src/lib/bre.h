@@ -9,8 +9,12 @@
 typedef enum
 {
     BRE_OK = 0,      // Operation/match succeeded; out params contain valid data
-    BRE_NOMATCH = 1, // No match or not applicable at current position; not an error
-    BRE_ERROR = 2    // Malformed pattern or unrecoverable error
+    BRE_NOMATCH = 1, // No match (generic), or not applicable for non-group atoms
+    BRE_ERROR = 2,   // Malformed pattern or unrecoverable error
+
+    // Group-specific disambiguation:
+    BRE_NOT_GROUP = 3,     // Pattern at current position is not a capture group
+    BRE_GROUP_MISMATCH = 4 // Pattern is a capture group but it failed to match at current text position
 } BreResult;
 
 /* Structure to hold match result and capture groups */
@@ -36,6 +40,13 @@ typedef struct
     int pend;         // pattern end (length of pattern)
 } MatchContext;
 
+typedef struct
+{
+    int min;     // minimum repetitions
+    int max;     // maximum repetitions (-1 for unbounded)
+    int next_pi; // next pattern index after the repetition spec
+} BreRepetition;
+
 /* Match a BRE pattern against a string.
  * Fills 'match' with the match position and capture groups.
  * Returns BRE_OK if a match is found, BRE_NOMATCH if none, BRE_ERROR on syntax errors.
@@ -56,6 +67,12 @@ char *bre_substitute(const char *text, const char *pattern, const char *replacem
  *   BRE_NOMATCH if there's no repetition at pi
  *   BRE_ERROR  for malformed sequences
  */
-BreResult parse_bre_repetition(const char *pat, int pi, int pend, int *min_rep, int *max_rep, int *next_pi);
+BreResult parse_bre_repetition(const char *pat, int pi, int pend, BreRepetition *rep);
+
+BreResult match_group_without_quantifier(MatchContext *ctx, BreMatch *m, int inner_start, int inner_end, int atom_end,
+                                         int *total_out);
+BreResult match_group_with_quantifier(MatchContext *ctx, BreMatch *m, int inner_start, int inner_end, int atom_start,
+                                      int atom_end, const BreRepetition *rep, int *total_out);
+BreResult match_group(MatchContext *ctx, BreMatch *m, int *total_out);
 
 #endif /* BRE_H */
