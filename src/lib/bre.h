@@ -5,6 +5,14 @@
 
 #define BRE_MAX_GROUPS 9 // Maximum number of capture groups (1-9)
 
+/* Success/No-match/Error result code for engine functions */
+typedef enum
+{
+    BRE_OK = 0,      // Operation/match succeeded; out params contain valid data
+    BRE_NOMATCH = 1, // No match or not applicable at current position; not an error
+    BRE_ERROR = 2    // Malformed pattern or unrecoverable error
+} BreResult;
+
 /* Structure to hold match result and capture groups */
 typedef struct
 {
@@ -30,19 +38,24 @@ typedef struct
 
 /* Match a BRE pattern against a string.
  * Fills 'match' with the match position and capture groups.
- * Returns true if a match is found, false otherwise.
+ * Returns BRE_OK if a match is found, BRE_NOMATCH if none, BRE_ERROR on syntax errors.
  */
-bool bre_match(const char *text, const char *pattern, BreMatch *match);
+BreResult bre_match(const char *text, const char *pattern, BreMatch *match);
 
 /* Substitute the first match of a BRE pattern with a replacement.
  * Returns a newly allocated string with the substitution, or NULL on error.
  * Caller must free the result.
- * 'text' is the input, 'pattern' is the BRE pattern, 'replacement' includes \1-\9.
+ * 'text' is the input; 'pattern' is the BRE pattern; 'replacement' includes \1-\9.
+ * If there is no match, returns a copy of 'text'.
  */
 char *bre_substitute(const char *text, const char *pattern, const char *replacement);
 
-// For debug test
-int parse_bre_repetition(const char *pat, int pi, int pend, int *min_rep, int *max_rep, int *next_pi);
-int match_here_group(MatchContext *ctx, BreMatch *m, int *group_id, bool direct);
+/* Exposed for tests: BRE repetition parser \{n\}, \{n,\}, \{n,m\}
+ * Returns:
+ *   BRE_OK     if a valid repetition was parsed and out params are set
+ *   BRE_NOMATCH if there's no repetition at pi
+ *   BRE_ERROR  for malformed sequences
+ */
+BreResult parse_bre_repetition(const char *pat, int pi, int pend, int *min_rep, int *max_rep, int *next_pi);
 
 #endif /* BRE_H */
