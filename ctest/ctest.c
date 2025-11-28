@@ -9,13 +9,14 @@ void ctest_register(CTestEntry *entry) {
     if (ctest_entry_count < 1024) {
         ctest_entries[ctest_entry_count++] = entry;
     } else {
-        printf("Error: Too many tests registered (max %d)\n", 1024);
+        printf("Bail out! Too many tests registered (max %d)\n", 1024);
     }
 }
 
 void ctest_run_all(void) {
     CTest ctest = {0, 0, NULL, NULL};
-    printf("Running %d tests...\n", ctest_entry_count);
+    // TAP plan: output test count at the beginning
+    printf("1..%d\n", ctest_entry_count);
     int unexpected_failures = 0; // count failures excluding XFAILs
 
     for (int i = 0; i < ctest_entry_count; i++) {
@@ -45,31 +46,26 @@ void ctest_run_all(void) {
         int this_failed = (failures_after_test > failures_before_test);
         if (ctest_entries[i]->xfail) {
             if (this_failed) {
-                // Expected failure occurred
-                printf("XFAIL: %s\n", ctest.current_test);
+                // Expected failure occurred - TAP TODO directive
+                printf("not ok %d - %s # TODO expected failure\n", ctest.tests_run, ctest.current_test);
                 // do not count towards unexpected failures
             } else {
-                // Test unexpectedly passed
-                printf("XPASS: %s\n", ctest.current_test);
+                // Test unexpectedly passed - TAP bonus pass
+                printf("ok %d - %s # TODO unexpected pass\n", ctest.tests_run, ctest.current_test);
                 unexpected_failures += 1;
             }
         } else {
             if (this_failed) {
+                printf("not ok %d - %s\n", ctest.tests_run, ctest.current_test);
                 unexpected_failures += 1;
             } else {
-                printf("PASS: %s\n", ctest.current_test);
+                printf("ok %d - %s\n", ctest.tests_run, ctest.current_test);
             }
         }
     }
 
-    printf("\nTests run: %d, Failed: %d\n", ctest.tests_run, unexpected_failures);
     ctest_last_summary.tests_run = ctest.tests_run;
     ctest_last_summary.tests_failed = unexpected_failures;
-    if (unexpected_failures == 0) {
-        printf("All tests passed!\n");
-    } else {
-        printf("Some tests failed.\n");
-    }
 }
 
 void ctest_reset(void) {
