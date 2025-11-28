@@ -46,12 +46,12 @@ void ctest_run_all(void) {
         int this_failed = (failures_after_test > failures_before_test);
         if (ctest_entries[i]->xfail) {
             if (this_failed) {
-                // Expected failure occurred - TAP SKIP directive
-                printf("ok %d - %s # SKIP expected failure\n", ctest.tests_run, ctest.current_test);
+                // Expected failure occurred - TAP TODO directive
+                printf("not ok %d - %s # TODO expected failure\n", ctest.tests_run, ctest.current_test);
                 // do not count towards unexpected failures
             } else {
-                // Test unexpectedly passed
-                printf("not ok %d - %s # unexpected pass (XPASS)\n", ctest.tests_run, ctest.current_test);
+                // Test unexpectedly passed - TAP bonus pass
+                printf("ok %d - %s # TODO unexpected pass\n", ctest.tests_run, ctest.current_test);
                 unexpected_failures += 1;
             }
         } else {
