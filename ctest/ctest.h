@@ -27,10 +27,10 @@ typedef struct {
     bool xfail; // expected failure
 } CTestEntry;
 
-// Assertion macros
+// Assertion macros - output TAP diagnostic on failure
 #define CTEST_ASSERT(test, msg) do { \
     if (!(test)) { \
-        printf("FAIL: %s:%d - %s: %s\n", __FILE__, __LINE__, ctest->current_test, msg); \
+        printf("# FAIL: %s:%d - %s: %s\n", __FILE__, __LINE__, ctest->current_test, msg); \
         ctest->tests_failed++; \
         return; \
     } \
