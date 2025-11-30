@@ -9,6 +9,8 @@ add_compile_options(-g3 -O0 -Wall -Wextra)
 add_library(vc STATIC
     src/lib/bre.c
     src/lib/bre.h
+    src/lib/getopt.c
+    src/lib/getopt.h
 )
 target_include_directories(vc PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/lib>
@@ -48,7 +50,6 @@ target_include_directories(ctest_obj PUBLIC
 
 # Make sure it sees ed.h and bre.h
 # target_include_directories(ctest_obj PRIVATE src/ed src/lib)
-
 
 set(ED_TEST_SOURCES
     test/ed/test_address_range_ctest.c
@@ -119,6 +120,24 @@ set_tests_properties(bre_test PROPERTIES
 )
 
 # ------------------------------------------------------------------
+# getopt_test - tests for getopt/getopt_long
+# ------------------------------------------------------------------
+add_executable(getopt_test
+    test/lib/getopt_test.c
+    src/lib/getopt.c
+    src/lib/getopt.h
+)
+target_link_libraries(getopt_test PRIVATE vc)
+target_include_directories(getopt_test PRIVATE src/lib)
+set_target_properties(getopt_test PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/test
+)
+add_test(NAME getopt_test COMMAND getopt_test WORKING_DIRECTORY ${CMAKE_BINARY_DIR}/test)
+set_tests_properties(getopt_test PROPERTIES
+    FAIL_REGULAR_EXPRESSION "not ok"
+)
+
+# ------------------------------------------------------------------
 # 5. Scripted integration tests using real 'ed' binary
 # ------------------------------------------------------------------
 set(SCRIPTED_TESTS
@@ -150,8 +169,23 @@ foreach(test_name IN LISTS SCRIPTED_TESTS)
 endforeach()
 
 # ------------------------------------------------------------------
-# 6. POSIX 'tr' utility
+# Utilities
 # ------------------------------------------------------------------
+add_executable(cat
+    src/cat/cat.c
+)
+set_target_properties(cat PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
+)
+add_executable(grep
+    src/grep/grep.c
+)
+target_link_libraries(grep PRIVATE vc)
+target_include_directories(grep PRIVATE src/lib)
+
+set_target_properties(grep PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
+)
 add_executable(tr
     src/tr/tr.c
 )
