@@ -1,6 +1,6 @@
 #include <stdlib.h>
 #include <string.h>
-#include "led.h"
+#include "ed.h"
 #include "ctest.h"
 
 static char* dup_cstr(const char* s) {

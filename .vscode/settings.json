@@ -1,3 +1,16 @@
 {
+  "cmake.sourceDirectory": "${workspaceFolder}/led/tests",
+  "cmake.buildDirectory": "${workspaceFolder}/led/tests/build",
+  "cmake.configureOnOpen": true,
+  "cmake.generator": "Visual Studio 17 2022",
+  "cmake.configureArgs": ["-A", "x64"],
+  "cmake.testExplorerEnabled": true,
+
+  // Let CMake Tools drive IntelliSense so std headers resolve
+  "C_Cpp.default.configurationProvider": "ms-vscode.cmake-tools",
+  "C_Cpp.intelliSenseEngine": "Default",
+  "C_Cpp.default.intelliSenseMode": "windows-msvc-x64"
+}
+{
     "makefile.makefilePath": "${workspaceFolder}/level2/sh23"
 }

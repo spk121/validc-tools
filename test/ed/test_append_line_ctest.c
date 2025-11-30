@@ -2,8 +2,8 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "../../ctest/ctest.h"
-#include "../led.h"
+#include "ctest.h"
+#include "ed.h"
 
 static char* dup_cstr(const char* s) {
     size_t n = strlen(s) + 1;

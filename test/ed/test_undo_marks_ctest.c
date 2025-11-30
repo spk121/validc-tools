@@ -1,6 +1,6 @@
 #include <stdlib.h>
 #include <string.h>
-#include "led.h"
+#include "ed.h"
 #include "ctest.h"
 
 static char* dup_cstr(const char* s){size_t n=strlen(s)+1;char* p=(char*)malloc(n);memcpy(p,s,n);return p;}

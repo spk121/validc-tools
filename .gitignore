@@ -54,6 +54,4 @@ dkms.conf
 # backup files
 *.bak
 *.bak2
-
-# Build directory
-build/
+*~

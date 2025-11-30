@@ -23,6 +23,10 @@ fnvtest cat.c
 ifc {{?}} == 1 {{CC}} {{CFLAGS}} -o cat cat.c
 echo cat build status: {{?}}
 
+; Build chgenc
+fnvtest chgenc.c
+ifc {{?}} == 1 {{CC}} {{CFLAGS}} -o chgenc chgenc.c
+echo chgenc build status: {{?}}
 ; Build fnvtest
 fnvtest fnvtest.c
 ifc {{?}} == 1 {{CC}} {{CFLAGS}} -o fnvtest fnvtest.c
@@ -37,6 +41,16 @@ echo fnvupdate build status: {{?}}
 fnvtest ifc.c
 ifc {{?}} == 1 {{CC}} {{CFLAGS}} -o ifc ifc.c
 echo ifc build status: {{?}}
+
+; Build sed
+fnvtest sed.c
+ifc {{?}} == 1 {{CC}} {{CFLAGS}} -o sed sed.c bre.c
+echo sed build status: {{?}}
+
+; Build checkenc
+fnvtest checkenc.c
+ifc {{?}} == 1 {{CC}} {{CFLAGS}} -o checkenc checkenc.c
+echo checkenc build status: {{?}}
 
 ; Final status
 echo Build complete

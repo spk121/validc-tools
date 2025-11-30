@@ -1,7 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "led.h"
+#include "ed.h"
 #include "ctest.h"
 
 // Helper to build a long string of given length with pattern 'A'..'Z'

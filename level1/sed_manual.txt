@@ -1,0 +1,44 @@
+sed - stream editor (strict POSIX subset)
+
+Usage:
+  sed [-n] [-e script]... [-f scriptfile]... [file ...]
+
+Options:
+  -n             Suppress automatic printing of the pattern space
+  -e script      Append a script to the set of editing commands
+  -f scriptfile  Read editing commands from scriptfile
+
+Addresses:
+  - Single address: a line number (1-based), '$' for last line of input, or a BRE address '/re/'.
+  - Range: addr1,addr2 applies to all lines from when addr1 matches until addr2 matches (inclusive).
+
+Supported commands:
+  p          Print the pattern space
+  d          Delete the pattern space; start the next cycle
+  q          Quit immediately (default prints apply to current line)
+  n          If auto-print is on, print; then read next line and start next cycle
+  =          Print the current line number
+  s/RE/REP/[flags]
+             Substitute using BRE (\1..\9 in REP). Flags: g (global), p (print on change),
+             number (replace that occurrence), w file (write result to file)
+  y/src/dst/ Transliterate characters in src to corresponding characters in dst (equal length)
+  w file     Write the pattern space to file (file is truncated on first write)
+  r file     Append contents of file to output (after current line)
+  a\         Append text (next script line(s), '\' at end continues)
+  i\         Insert text before current line
+  c\         Replace pattern space by text
+  N          Append next input line to the pattern space (with a newline)
+  D          Delete up to first embedded newline; if none, act like d
+  P          Print up to first embedded newline
+  h          Copy pattern space to hold space
+  H          Append pattern space to hold space
+  g          Copy hold space to pattern space
+  G          Append hold space to pattern space
+  x          Exchange pattern and hold space
+  l          Print pattern space in a visible form, ending with '$'
+
+Notes:
+- BREs are implemented by the built-in module (., *, ^, $, bracket classes, and \(...\) groups).
+- No GNU/BSD extensions are supported (no -i, -r/-E, -z, -s, labels/branches, or multi-file editing).
+- For a/i/c, the next script line(s) are taken as text. A trailing '\' continues onto the next script line and inserts a literal newline.
+- Default printing: unless -n is given or commands delete/replace early, the (possibly modified) pattern space is printed at the end of each cycle.

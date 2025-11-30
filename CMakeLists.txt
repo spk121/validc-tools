@@ -37,6 +37,19 @@ set_target_properties(ed PROPERTIES
 # ------------------------------------------------------------------
 enable_testing()
 
+# Object library for the shared CTest framework used by all ed tests
+add_library(ctest_obj OBJECT
+    test/ctest/ctest.c
+    test/ctest/ctest.h
+)
+target_include_directories(ctest_obj PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/test/ctest
+)
+
+# Make sure it sees ed.h and bre.h
+# target_include_directories(ctest_obj PRIVATE src/ed src/lib)
+
+
 set(ED_TEST_SOURCES
     test/ed/test_address_range_ctest.c
     test/ed/test_address_validation_ctest.c
@@ -63,10 +76,15 @@ foreach(test_src ${ED_TEST_SOURCES})
     add_executable(${test_name} ${test_src}
         src/ed/ed.c     # real implementation
         src/ed/ed.h
+        $<TARGET_OBJECTS:ctest_obj>
     )
     target_compile_definitions(${test_name} PRIVATE LED_TEST)
     target_link_libraries(${test_name} PRIVATE vc)
-    target_include_directories(${test_name} PRIVATE src/lib src/ed)
+    target_include_directories(${test_name} PRIVATE
+        src/lib
+        src/ed
+        ${CMAKE_CURRENT_SOURCE_DIR}/test/ctest
+    )
     set_target_properties(${test_name} PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/test
     )
@@ -76,10 +94,12 @@ foreach(test_src ${ED_TEST_SOURCES})
         COMMAND ${test_name}
         WORKING_DIRECTORY ${CMAKE_BINARY_DIR}/test
     )
+
     set_tests_properties(${test_name} PROPERTIES
-        FAIL_REGULAR_EXPRESSION "not ok"
-        PASS_REGULAR_EXPRESSION "1\\.\\.\\d+"  # any TAP plan is fine
+        FAIL_REGULAR_EXPRESSION "not ok|\\b(Bail out!|Bailout!)\\b"
+        PASS_REGULAR_EXPRESSION "ok"
     )
+
 endforeach()
 
 # ------------------------------------------------------------------
@@ -98,50 +118,43 @@ set_tests_properties(bre_test PROPERTIES
     FAIL_REGULAR_EXPRESSION "not ok"
 )
 
-# cmake/run_ed_script_test.cmake
-# Called by CTest for each scripted test
-
-if(NOT EXISTS ${TEST_DIR}/${test_name}.ed)
-    message(FATAL_ERROR "Missing .ed script: ${TEST_DIR}/${test_name}.ed")
-endif()
-
-# Input file is optional — if missing, ed reads from stdin (which we'll make empty)
-if(EXISTS ${TEST_DIR}/${test_name}_in.txt)
-    set(INPUT_FILE ${TEST_DIR}/${test_name}_in.txt)
-else()
-    set(INPUT_FILE /dev/null)
-endif()
-
-# Run ed with -S script, input file, output to temp
-execute_process(
-    COMMAND ${ED_BINARY} -S ${TEST_DIR}/${test_name}.ed ${INPUT_FILE} -o ${OUT_FILE}
-    RESULT_VARIABLE ed_exit_code
-    OUTPUT_VARIABLE ed_stdout
-    ERROR_VARIABLE ed_stderr
+# ------------------------------------------------------------------
+# 5. Scripted integration tests using real 'ed' binary
+# ------------------------------------------------------------------
+set(SCRIPTED_TESTS
+    empty
+    simple
+    verbose
+    global_brace
 )
 
-if(NOT ed_exit_code EQUAL 0)
-    message("=== ed STDOUT ===\n${ed_stdout}")
-    message("=== ed STDERR ===\n${ed_stderr}")
-    message(FATAL_ERROR "TEST FAILED: ed exited with code ${ed_exit_code}")
-endif()
+foreach(test_name IN LISTS SCRIPTED_TESTS)
+    set(test_dir ${CMAKE_CURRENT_SOURCE_DIR}/test/ed/scripts)
 
-# Compare output with expected
-if(NOT EXISTS ${TEST_DIR}/${test_name}_expected.txt)
-    message(FATAL_ERROR "Missing expected output: ${TEST_DIR}/${test_name}_expected.txt")
-endif()
+    add_test(
+        NAME scripted_${test_name}
+        COMMAND ${CMAKE_COMMAND}
+            -D ED_BINARY=$<TARGET_FILE:ed>
+            -D TEST_DIR=${test_dir}
+	    -D TEST_NAME=${test_name}
+            -D OUT_FILE=${CMAKE_BINARY_DIR}/test/${test_name}_out.txt
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/run_ed_script_test.cmake
+        WORKING_DIRECTORY ${CMAKE_BINARY_DIR}/test
+    )
 
-execute_process(
-    COMMAND ${CMAKE_COMMAND} -E compare_files
-        ${OUT_FILE} ${TEST_DIR}/${test_name}_expected.txt
-    RESULT_VARIABLE diff_result
+    # Fail if ed exits non-zero OR if output differs
+    set_tests_properties(scripted_${test_name} PROPERTIES
+        FAIL_REGULAR_EXPRESSION "TEST FAILED"
+        TIMEOUT 10
+    )
+endforeach()
+
+# ------------------------------------------------------------------
+# 6. POSIX 'tr' utility
+# ------------------------------------------------------------------
+add_executable(tr
+    src/tr/tr.c
 )
-
-if(NOT diff_result EQUAL 0)
-    message("=== ACTUAL OUTPUT (${OUT_FILE}) ===")
-    file(READ ${OUT_FILE} actual_content)
-    message("${actual_content}")
-    message(FATAL_ERROR "TEST FAILED: output differs from expected")
-endif()
-
-message("Test ${test_name}: PASSED")
+set_target_properties(tr PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
+)
