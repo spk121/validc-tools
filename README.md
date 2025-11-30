@@ -1,4 +1,7 @@
 # validc-tools
+
+[![CI](https://github.com/spk121/validc-tools/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/spk121/validc-tools/actions/workflows/ci.yml)
+
 This intends to be a self-contained userland, rather like
 busybox, but that only uses functions in the ISO C standard,
 with no POSIX or Win32 extensions.
