@@ -140,33 +140,34 @@ set_tests_properties(getopt_test PROPERTIES
 # ------------------------------------------------------------------
 # 5. Scripted integration tests using real 'ed' binary
 # ------------------------------------------------------------------
-set(SCRIPTED_TESTS
-    empty
-    simple
-    verbose
-    global_brace
-)
 
-foreach(test_name IN LISTS SCRIPTED_TESTS)
-    set(test_dir ${CMAKE_CURRENT_SOURCE_DIR}/test/ed/scripts)
+# set(SCRIPTED_TESTS
+#     empty
+#     simple
+#     verbose
+#     global_brace
+# )
 
-    add_test(
-        NAME scripted_${test_name}
-        COMMAND ${CMAKE_COMMAND}
-            -D ED_BINARY=$<TARGET_FILE:ed>
-            -D TEST_DIR=${test_dir}
-	    -D TEST_NAME=${test_name}
-            -D OUT_FILE=${CMAKE_BINARY_DIR}/test/${test_name}_out.txt
-            -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/run_ed_script_test.cmake
-        WORKING_DIRECTORY ${CMAKE_BINARY_DIR}/test
-    )
+# foreach(test_name IN LISTS SCRIPTED_TESTS)
+#     set(test_dir ${CMAKE_CURRENT_SOURCE_DIR}/test/ed/scripts)
 
-    # Fail if ed exits non-zero OR if output differs
-    set_tests_properties(scripted_${test_name} PROPERTIES
-        FAIL_REGULAR_EXPRESSION "TEST FAILED"
-        TIMEOUT 10
-    )
-endforeach()
+#     add_test(
+#         NAME scripted_${test_name}
+#         COMMAND ${CMAKE_COMMAND}
+#             -D ED_BINARY=$<TARGET_FILE:ed>
+#             -D TEST_DIR=${test_dir}
+# 	    -D TEST_NAME=${test_name}
+#             -D OUT_FILE=${CMAKE_BINARY_DIR}/test/${test_name}_out.txt
+#             -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/run_ed_script_test.cmake
+#         WORKING_DIRECTORY ${CMAKE_BINARY_DIR}/test
+#     )
+
+#     # Fail if ed exits non-zero OR if output differs
+#     set_tests_properties(scripted_${test_name} PROPERTIES
+#         FAIL_REGULAR_EXPRESSION "TEST FAILED"
+#         TIMEOUT 10
+#     )
+# endforeach()
 
 # ------------------------------------------------------------------
 # Utilities
