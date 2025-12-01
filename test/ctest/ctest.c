@@ -1,83 +1,80 @@
 #include "ctest.h"
-#include <string.h>
+#include <stdio.h>
 
-static CTestEntry *ctest_entries[1024]; // Max tests, adjustable
-static int ctest_entry_count = 0;
-static CTestSummary ctest_last_summary = {0, 0};
+static CTestSummary last_summary = { 0, 0 };
 
-void ctest_register(CTestEntry *entry) {
-    if (ctest_entry_count < 1024) {
-        ctest_entries[ctest_entry_count++] = entry;
-    } else {
-        printf("Bail out! Too many tests registered (max %d)\n", 1024);
-    }
-}
+int ctest_run_suite(CTestEntry** suite)
+{
+    CTest ctest = { 0 };
+    int test_count = 0;
+    int unexpected_failures = 0;
 
-void ctest_run_all(void) {
-    CTest ctest = {0, 0, NULL, NULL};
-    // TAP plan: output test count at the beginning
+    // Count tests
+    for (CTestEntry** p = suite; *p; ++p) test_count++;
+
     printf("TAP version 14\n");
-    printf("1..%d\n", ctest_entry_count);
-    int unexpected_failures = 0; // count failures excluding XFAILs
+    printf("1..%d\n", test_count);
 
-    for (int i = 0; i < ctest_entry_count; i++) {
+    for (CTestEntry** p = suite; *p; ++p) {
+        CTestEntry* entry = *p;
         ctest.tests_run++;
-        ctest.current_test = ctest_entries[i]->name;
-        int failures_before_test = ctest.tests_failed;
+        ctest.current_test = entry->name;
+        int failed_before = ctest.tests_failed;
 
-        // Run setup if provided
-        if (ctest_entries[i]->setup) {
-            ctest_entries[i]->setup(&ctest);
+        // Run setup
+        if (entry->setup) {
+            entry->setup(&ctest);
         }
 
-        // Only run the test function if setup did not fail
-        int failures_after_setup = ctest.tests_failed;
-        if (failures_after_setup == failures_before_test) {
-            // setup passed; run the test body
-            ctest_entries[i]->func(&ctest);
+        // Only run test body if setup didn't fail
+        if (ctest.tests_failed == failed_before) {
+            entry->func(&ctest);
         }
 
-        // Run teardown if provided
-        if (ctest_entries[i]->teardown) {
-            ctest_entries[i]->teardown(&ctest);
+        // Run teardown (always, even if test or setup failed)
+        if (entry->teardown) {
+            entry->teardown(&ctest);
         }
 
-        // Determine result considering XFAIL/XPASS across setup/body/teardown
-        int failures_after_test = ctest.tests_failed;
-        int this_failed = (failures_after_test > failures_before_test);
-        if (ctest_entries[i]->xfail) {
+        bool this_failed = (ctest.tests_failed > failed_before);
+
+        if (entry->xfail) {
             if (this_failed) {
-                // Expected failure occurred - TAP TODO directive
-                printf("not ok %d - %s # TODO expected failure\n", ctest.tests_run, ctest.current_test);
-                // do not count towards unexpected failures
-            } else {
-                // Test unexpectedly passed - TAP bonus pass
-                printf("ok %d - %s # TODO unexpected pass\n", ctest.tests_run, ctest.current_test);
-                unexpected_failures += 1;
+                printf("not ok %d - %s # TODO expected failure\n",
+                    ctest.tests_run, entry->name);
             }
-        } else {
+            else {
+                printf("ok %d - %s # TODO unexpected success\n",
+                    ctest.tests_run, entry->name);
+                unexpected_failures++;
+            }
+        }
+        else {
             if (this_failed) {
-                printf("not ok %d - %s\n", ctest.tests_run, ctest.current_test);
-                unexpected_failures += 1;
-            } else {
-                printf("ok %d - %s\n", ctest.tests_run, ctest.current_test);
+                printf("not ok %d - %s\n", ctest.tests_run, entry->name);
+                unexpected_failures++;
+            }
+            else {
+                printf("ok %d - %s\n", ctest.tests_run, entry->name);
             }
         }
     }
 
-    ctest_last_summary.tests_run = ctest.tests_run;
-    ctest_last_summary.tests_failed = unexpected_failures;
-}
-
-void ctest_reset(void) {
-    for (int i = 0; i < ctest_entry_count; ++i) {
-        ctest_entries[i] = NULL;
+    // Final summary
+    if (unexpected_failures == 0) {
+        printf("# All %d tests passed!\n", ctest.tests_run);
     }
-    ctest_entry_count = 0;
-    ctest_last_summary.tests_run = 0;
-    ctest_last_summary.tests_failed = 0;
+    else {
+        printf("# %d test(s) failed unexpectedly\n", unexpected_failures);
+    }
+
+    last_summary.tests_run = ctest.tests_run;
+    last_summary.unexpected_failures = unexpected_failures;
+
+    return unexpected_failures != 0;
 }
 
-CTestSummary ctest_last_results(void) {
-    return ctest_last_summary;
+CTestSummary ctest_last_summary(void)
+{
+    return last_summary;
 }

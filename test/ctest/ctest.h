@@ -1,97 +1,113 @@
 #ifndef CTEST_H
 #define CTEST_H
 
-#include <stdbool.h>
 #include <stdio.h>
+#include <string.h>
+#include <stdbool.h>
 
-// Test context
+typedef struct CTest CTest;
+
+// Test function signature
+typedef void (*CTestFunc)(CTest*);
+
+// Setup/teardown function signature
+typedef void (*CTestSetupFunc)(CTest*);
+
+// Test entry
 typedef struct {
-    int tests_run;
-    int tests_failed;
-    const char *current_test;
-    void *user_data; // For setup/teardown
-} CTest;
-
-// Test function type
-typedef void (*CTestFunc)(CTest *);
-
-// Setup/teardown function type
-typedef void (*CTestSetupFunc)(CTest *);
-
-// Test registration structure
-typedef struct {
-    const char *name;
+    const char* name;
     CTestFunc func;
     CTestSetupFunc setup;
     CTestSetupFunc teardown;
-    bool xfail; // expected failure
+    bool xfail;           // expected to fail
 } CTestEntry;
 
-// Assertion macros - output TAP diagnostic on failure
-#define CTEST_ASSERT(test, msg) do { \
-    if (!(test)) { \
-        printf("# FAIL: %s:%d - %s: %s\n", __FILE__, __LINE__, ctest->current_test, msg); \
-        ctest->tests_failed++; \
+// Test context (passed to each test)
+typedef struct CTest {
+    int tests_run;
+    int tests_failed;
+    const char* current_test;
+    void* user_data;      // optional, for fixtures
+} CTest;
+
+// === Assertion Macros ===
+#define CTEST_ASSERT(ctest, cond, msg) do { \
+    if (!(cond)) { \
+        printf("#     FAIL: %s:%d in %s\n#          %s\n", \
+               __FILE__, __LINE__, (ctest)->current_test, (msg)); \
+        (ctest)->tests_failed++; \
         return; \
     } \
 } while (0)
 
-#define CTEST_ASSERT_EQ(a, b, msg) CTEST_ASSERT((a) == (b), msg)
-#define CTEST_ASSERT_NE(a, b, msg) CTEST_ASSERT((a) != (b), msg)
-#define CTEST_ASSERT_TRUE(cond, msg) CTEST_ASSERT((cond), msg)
-#define CTEST_ASSERT_FALSE(cond, msg) CTEST_ASSERT(!(cond), msg)
-#define CTEST_ASSERT_NULL(ptr, msg) CTEST_ASSERT((ptr) == NULL, msg)
-#define CTEST_ASSERT_NOT_NULL(ptr, msg) CTEST_ASSERT((ptr) != NULL, msg)
-#define CTEST_ASSERT_STR_EQ(s1, s2, msg) CTEST_ASSERT(strcmp((s1), (s2)) == 0, msg)
+#define CTEST_ASSERT_EQ(ctest, a, b, msg) \
+    CTEST_ASSERT(ctest, (a) == (b), msg " (" #a " == " #b ")")
 
-// Test definition and registration
-#define CTEST_TEST(name) \
-    static void name(CTest *ctest); \
-    static void name##_setup(CTest *ctest) __attribute__((unused)); \
-    static void name##_teardown(CTest *ctest) __attribute__((unused)); \
-    static CTestEntry ctest_entry_##name = { #name, name, name##_setup, name##_teardown, false }; \
-    __attribute__((constructor)) static void name##_register(void) { \
-        ctest_register(&ctest_entry_##name); \
-    } \
-    static void name(CTest *ctest)
+#define CTEST_ASSERT_NE(ctest, a, b, msg) \
+    CTEST_ASSERT(ctest, (a) != (b), msg)
 
-// Define a test that is expected to fail (XFAIL)
-#define CTEST_XFAIL(name) \
-    static void name(CTest *ctest); \
-    static void name##_setup(CTest *ctest) __attribute__((unused)); \
-    static void name##_teardown(CTest *ctest) __attribute__((unused)); \
-    static CTestEntry ctest_entry_##name = { #name, name, name##_setup, name##_teardown, true }; \
-    __attribute__((constructor)) static void name##_register(void) { \
-        ctest_register(&ctest_entry_##name); \
-    } \
-    static void name(CTest *ctest)
+#define CTEST_ASSERT_TRUE(ctest, cond, msg) \
+    CTEST_ASSERT(ctest, (cond), msg)
 
-// Test definition without setup/teardown (both are noop)
-static inline void ctest_noop_setup(CTest *ctest) { (void)ctest; }
-static inline void ctest_noop_teardown(CTest *ctest) { (void)ctest; }
+#define CTEST_ASSERT_FALSE(ctest, cond, msg) \
+    CTEST_ASSERT(ctest, !(cond), msg " (expected false)")
 
-#define CTEST_TEST_SIMPLE(name) \
-    static void name(CTest *ctest); \
-    static CTestEntry ctest_entry_##name = { #name, name, ctest_noop_setup, ctest_noop_teardown, false }; \
-    __attribute__((constructor)) static void name##_register(void) { \
-        ctest_register(&ctest_entry_##name); \
-    } \
-    static void name(CTest *ctest)
+#define CTEST_ASSERT_NULL(ctest, ptr, msg) \
+    CTEST_ASSERT(ctest, (ptr) == NULL, msg)
 
-// Run all tests
-void ctest_run_all(void);
-void ctest_register(CTestEntry *entry);
+#define CTEST_ASSERT_NOT_NULL(ctest, ptr, msg) \
+    CTEST_ASSERT(ctest, (ptr) != NULL, msg)
 
-// Test harness utilities
-// Reset registered tests (for isolated test scenarios)
-void ctest_reset(void);
+#define CTEST_ASSERT_STR_EQ(ctest, s1, s2, msg) \
+    CTEST_ASSERT(ctest, strcmp((s1), (s2)) == 0, msg)
 
-// Access last run summary (tests_run and tests_failed)
+// === Test Declaration Macros ===
+
+// Simple test, no setup/teardown
+#define CTEST(Name) \
+    static void ctest_func_##Name(CTest *ctest); \
+    static CTestEntry ctest_entry_##Name = { \
+        .name = #Name, \
+        .func = ctest_func_##Name, \
+        .setup = NULL, \
+        .teardown = NULL, \
+        .xfail = false \
+    }; \
+    static void ctest_func_##Name(CTest *ctest)
+
+// Test with setup/teardown
+#define CTEST_WITH_FIXTURE(Name, setup_fn, teardown_fn) \
+    static void ctest_func_##Name(CTest *ctest); \
+    static CTestEntry ctest_entry_##Name = { \
+        .name = #Name, \
+        .func = ctest_func_##Name, \
+        .setup = (setup_fn), \
+        .teardown = (teardown_fn), \
+        .xfail = false \
+    }; \
+    static void ctest_func_##Name(CTest *ctest)
+
+// Expected-to-fail test (XFAIL)
+#define CTEST_XFAIL(Name) \
+    static void ctest_func_##Name(CTest *ctest); \
+    static CTestEntry ctest_entry_##Name = { \
+        .name = #Name, \
+        .func = ctest_func_##Name, \
+        .setup = NULL, \
+        .teardown = NULL, \
+        .xfail = true \
+    }; \
+    static void ctest_func_##Name(CTest *ctest)
+
+// === Runner ===
+int ctest_run_suite(CTestEntry** suite);  // NULL-terminated array
+
+// Summary of last run
 typedef struct {
     int tests_run;
-    int tests_failed;
+    int unexpected_failures;
 } CTestSummary;
 
-CTestSummary ctest_last_results(void);
+CTestSummary ctest_last_summary(void);
 
 #endif // CTEST_H
