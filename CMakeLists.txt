@@ -1,7 +1,11 @@
 cmake_minimum_required(VERSION 3.16)
 project(validc-tools LANGUAGES C)
 
-add_compile_options(-g3 -O0 -Wall -Wextra)
+if(MSVC)
+    add_compile_options(/W4 /Od /Zi)
+else()
+    add_compile_options(-Wall -Wextra -g3 -O0)
+endif()
 
 # ------------------------------------------------------------------
 # 1. Static library: libvc
@@ -172,6 +176,12 @@ set_tests_properties(getopt_test PROPERTIES
 # ------------------------------------------------------------------
 # Utilities
 # ------------------------------------------------------------------
+add_executable(batch
+    src/batch/batch.c
+)
+set_target_properties(batch PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
+)
 add_executable(cat
     src/cat/cat.c
 )
