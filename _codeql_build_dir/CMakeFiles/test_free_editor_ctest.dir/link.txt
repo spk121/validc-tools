@@ -1,1 +1,0 @@
-/home/runner/work/strictland/.codeql-scratch/dbs/cpp/working/autobuild/bin/cc -O3 -DNDEBUG -Wl,--dependency-file=CMakeFiles/test_free_editor_ctest.dir/link.d CMakeFiles/test_free_editor_ctest.dir/test/ed/test_free_editor_ctest.c.o CMakeFiles/test_free_editor_ctest.dir/src/ed/ed.c.o CMakeFiles/ctest_obj.dir/test/ctest/ctest.c.o -o test/test_free_editor_ctest  lib/libvc.a
