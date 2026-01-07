@@ -56,7 +56,15 @@ static void format_octal(char *dest, unsigned long value, size_t size) {
         dest[i] = '0' + (value & 7);
         value >>= 3;
     }
-    dest[0] = '0';
+    /* Set first character, handling potential overflow */
+    if (value > 7) {
+        /* Value is too large, fill with maximum octal value */
+        for (i = 0; i < size - 1; i++) {
+            dest[i] = '7';
+        }
+    } else {
+        dest[0] = '0' + (value & 7);
+    }
 }
 
 /* Parse an octal string */
@@ -114,7 +122,8 @@ static void init_header(struct tar_header *header, const char *filename,
     header->typeflag = '0';
     
     /* Set ustar magic and version */
-    strncpy(header->magic, "ustar", MAGIC_SIZE);
+    memcpy(header->magic, "ustar", 5);
+    header->magic[5] = '\0';
     header->version[0] = '0';
     header->version[1] = '0';
     
@@ -437,12 +446,13 @@ int main(int argc, char *argv[]) {
                         if (i + 1 < argc) {
                             archive_name = argv[++i];
                         }
+                        break;
                     } else {
                         /* Name immediately follows -f */
                         archive_name = (char *)(opt + j + 1);
-                        j = strlen(opt); /* Skip rest of this option string */
+                        j = strlen(opt) - 1; /* Will increment to strlen(opt), terminating loop */
+                        break;
                     }
-                    break;
                 default:
                     fprintf(stderr, "Error: Unknown option '-%c'\n", opt[j]);
                     print_help();
