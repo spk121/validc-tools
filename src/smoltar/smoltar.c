@@ -52,11 +52,12 @@ struct tar_header {
 static void format_octal(char *dest, unsigned long value, size_t size) {
     size_t i;
     dest[size - 1] = '\0';
+    /* Fill digits from right to left, stopping before position 0 */
     for (i = size - 2; i > 0; i--) {
         dest[i] = '0' + (value & 7);
         value >>= 3;
     }
-    /* Set first character, handling potential overflow */
+    /* Handle position 0 separately to check for overflow */
     if (value > 7) {
         /* Value is too large, fill with maximum octal value */
         for (i = 0; i < size - 1; i++) {
@@ -98,8 +99,17 @@ static unsigned long calculate_checksum(const struct tar_header *header) {
 static void init_header(struct tar_header *header, const char *filename, 
                        unsigned long filesize) {
     time_t now;
+    const char *p;
     
     memset(header, 0, sizeof(*header));
+    
+    /* Validate filename: must not contain any path separators */
+    for (p = filename; *p != '\0'; ++p) {
+        if (*p == '/' || *p == '\\') {
+            fprintf(stderr, "Error: filename must not contain path separators: %s\n", filename);
+            exit(EXIT_FAILURE);
+        }
+    }
     
     /* Set filename (must not have path elements) */
     strncpy(header->name, filename, NAME_SIZE - 1);
@@ -128,9 +138,9 @@ static void init_header(struct tar_header *header, const char *filename,
     header->version[1] = '0';
     
     /* Calculate and set checksum */
+    /* Standard ustar format: 6-digit octal, null byte, space */
     memset(header->chksum, ' ', CHKSUM_SIZE);
-    format_octal(header->chksum, calculate_checksum(header), CHKSUM_SIZE - 1);
-    header->chksum[CHKSUM_SIZE - 2] = '\0';
+    format_octal(header->chksum, calculate_checksum(header), CHKSUM_SIZE);
     header->chksum[CHKSUM_SIZE - 1] = ' ';
 }
 
@@ -449,7 +459,7 @@ int main(int argc, char *argv[]) {
                         break;
                     } else {
                         /* Name immediately follows -f */
-                        archive_name = (char *)(opt + j + 1);
+                        archive_name = argv[i] + j + 1;
                         j = strlen(opt) - 1; /* Will increment to strlen(opt), terminating loop */
                         break;
                     }
