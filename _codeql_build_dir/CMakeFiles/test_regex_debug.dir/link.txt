@@ -1,0 +1,1 @@
+/home/runner/work/strictland/.codeql-scratch/dbs/cpp/working/autobuild/bin/cc -O3 -DNDEBUG -Wl,--dependency-file=CMakeFiles/test_regex_debug.dir/link.d CMakeFiles/test_regex_debug.dir/test/ed/test_regex_debug.c.o CMakeFiles/test_regex_debug.dir/src/ed/ed.c.o CMakeFiles/ctest_obj.dir/test/ctest/ctest.c.o -o test/test_regex_debug  lib/libvc.a

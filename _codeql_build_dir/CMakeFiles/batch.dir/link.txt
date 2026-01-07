@@ -1,0 +1,1 @@
+/home/runner/work/strictland/.codeql-scratch/dbs/cpp/working/autobuild/bin/cc -O3 -DNDEBUG -Wl,--dependency-file=CMakeFiles/batch.dir/link.d CMakeFiles/batch.dir/src/batch/batch.c.o -o bin/batch

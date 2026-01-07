@@ -1,0 +1,1 @@
+/home/runner/work/strictland/.codeql-scratch/dbs/cpp/working/autobuild/bin/cc -O3 -DNDEBUG -Wl,--dependency-file=CMakeFiles/bre_test.dir/link.d CMakeFiles/bre_test.dir/test/lib/bre_test.c.o -o test/bre_test  lib/libvc.a

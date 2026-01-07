@@ -1,0 +1,1 @@
+/home/runner/work/strictland/.codeql-scratch/dbs/cpp/working/autobuild/bin/cc -O3 -DNDEBUG -Wl,--dependency-file=CMakeFiles/ed.dir/link.d CMakeFiles/ed.dir/src/ed/ed.c.o -o bin/ed  lib/libvc.a

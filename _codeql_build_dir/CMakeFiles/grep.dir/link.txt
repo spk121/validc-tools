@@ -1,0 +1,1 @@
+/home/runner/work/strictland/.codeql-scratch/dbs/cpp/working/autobuild/bin/cc -O3 -DNDEBUG -Wl,--dependency-file=CMakeFiles/grep.dir/link.d CMakeFiles/grep.dir/src/grep/grep.c.o -o bin/grep  lib/libvc.a

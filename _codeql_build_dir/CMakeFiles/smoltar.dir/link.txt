@@ -1,0 +1,1 @@
+/home/runner/work/strictland/.codeql-scratch/dbs/cpp/working/autobuild/bin/cc -O3 -DNDEBUG -Wl,--dependency-file=CMakeFiles/smoltar.dir/link.d CMakeFiles/smoltar.dir/src/smoltar/smoltar.c.o -o bin/smoltar

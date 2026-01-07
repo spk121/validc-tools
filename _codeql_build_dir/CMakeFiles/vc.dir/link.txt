@@ -1,0 +1,2 @@
+/usr/bin/ar qc lib/libvc.a CMakeFiles/vc.dir/src/lib/bre.c.o CMakeFiles/vc.dir/src/lib/getopt.c.o
+/usr/bin/ranlib lib/libvc.a
