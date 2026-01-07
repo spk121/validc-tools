@@ -203,3 +203,11 @@ add_executable(tr
 set_target_properties(tr PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
 )
+add_executable(smoltar
+    src/smoltar/smoltar.c
+    src/smoltar/sha256.c
+)
+target_include_directories(smoltar PRIVATE src/smoltar)
+set_target_properties(smoltar PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
+)
