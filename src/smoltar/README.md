@@ -6,7 +6,9 @@
 
 - **ISO C Compliance**: Uses only standard C library functions (no POSIX extensions)
 - **Ustar Format**: Creates archives compatible with standard tar tools
-- **Simple Interface**: Create, extract, and list archive contents
+- **SHA-256 Hashing**: Computes and stores SHA-256 hash for each file
+- **Smart Extraction**: Three extraction modes (force, normal, safe)
+- **Prefix Support**: Optional prefix for extracted filenames
 - **Checksum Validation**: Verifies archive integrity using header checksums
 
 ## Building
@@ -31,7 +33,17 @@ smoltar -cf archive.tar file1.txt file2.txt file3.txt
 ### Extract an Archive
 
 ```bash
+# Force mode (default): Always extract, overwrite existing files
 smoltar -xf archive.tar
+
+# Normal mode: Only extract if SHA-256 differs or file doesn't exist
+smoltar -xf archive.tar -m normal
+
+# Safe mode: Never overwrite existing files
+smoltar -xf archive.tar -m safe
+
+# Extract with prefix
+smoltar -xf archive.tar -p output/
 ```
 
 ### List Archive Contents
@@ -45,8 +57,16 @@ smoltar -tf archive.tar
 - `-c` - Create a new archive
 - `-x` - Extract files from archive
 - `-t` - List contents of archive
-- `-f` - Specify archive file (required)
+- `-f FILE` - Specify archive file (required)
+- `-m MODE` - Extraction mode: `force` (default), `normal`, or `safe`
+- `-p PREFIX` - Prepend PREFIX to extracted filenames
 - `-h` - Display help message
+
+### Extraction Modes
+
+- **force**: Always extract all files, overwriting existing ones
+- **normal**: Extract only if file doesn't exist or SHA-256 hash differs
+- **safe**: Never overwrite existing files
 
 Options can be combined (e.g., `-cf` or `-cfarchive.tar`).
 
@@ -66,7 +86,7 @@ Options can be combined (e.g., `-cf` or `-cfarchive.tar`).
 | mtime    | 136    | 12   | Modification time in octal (current time)      |
 | chksum   | 148    | 8    | Header checksum in octal                       |
 | typeflag | 156    | 1    | Type flag ('0' for regular file)               |
-| linkname | 157    | 100  | Link name (unused)                             |
+| linkname | 157    | 100  | SHA-256 hash of file content (64 hex chars)    |
 | magic    | 257    | 6    | Magic string ("ustar\0")                       |
 | version  | 263    | 2    | Version ("00")                                 |
 | uname    | 265    | 32   | User name (unused)                             |
@@ -90,6 +110,16 @@ Since `smoltar` uses only ISO C functions:
 
 The checksum is the sum of all bytes in the header, treating the checksum field itself as 8 space characters (ASCII 32).
 
+### SHA-256 Hash Storage
+
+For each file added to the archive, `smoltar` computes a SHA-256 hash of the file content and stores the 64-character hexadecimal representation in the `linkname` field (offset 157, 100 bytes). This enables:
+
+- **Content-based comparison**: The `normal` extraction mode uses SHA-256 to determine if a file has changed
+- **Integrity verification**: Future enhancements could verify file integrity after extraction
+- **Deduplication**: The hash can be used to identify duplicate files
+
+Since ISO C provides no way to query file modification times, SHA-256 hashing provides the only reliable method to detect file changes between the filesystem and archive.
+
 ## Limitations
 
 - Files must not have path separators in their names
@@ -100,19 +130,28 @@ The checksum is the sum of all bytes in the header, treating the checksum field 
 
 ## Compatibility
 
-Archives created by `smoltar` can be extracted by standard `tar` implementations, and `smoltar` can extract standard tar archives (with the limitations noted above).
+Archives created by `smoltar` can be extracted by standard `tar` implementations, and `smoltar` can extract standard tar archives (with the limitations noted above). The SHA-256 hash stored in the linkname field will be ignored by standard tar tools.
 
 ## Examples
 
 ```bash
-# Create an archive
+# Create an archive with SHA-256 hashes
 smoltar -cf backup.tar file1.txt file2.txt
 
 # List contents
 smoltar -tf backup.tar
 
-# Extract all files
+# Extract all files (force mode - always overwrites)
 smoltar -xf backup.tar
+
+# Extract only changed files (normal mode)
+smoltar -xf backup.tar -m normal
+
+# Extract with prefix (e.g., into a subdirectory)
+smoltar -xf backup.tar -p extracted/
+
+# Safe extraction (never overwrite)
+smoltar -xf backup.tar -m safe
 
 # Create with combined options
 smoltar -cfbackup.tar file1.txt file2.txt
