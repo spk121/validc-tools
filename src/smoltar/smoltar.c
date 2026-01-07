@@ -165,9 +165,10 @@ static void sha256_init(struct sha256_ctx *ctx) {
 static void sha256_update(struct sha256_ctx *ctx, const unsigned char *data, size_t len) {
     size_t i;
     unsigned long index = (ctx->count[0] >> 3) & 0x3f;
+    unsigned long bitlen = (unsigned long)(len << 3);
     
-    ctx->count[0] += (unsigned long)(len << 3);
-    if (ctx->count[0] < (unsigned long)(len << 3)) {
+    ctx->count[0] += bitlen;
+    if (ctx->count[0] < bitlen) {
         ctx->count[1]++;
     }
     ctx->count[1] += (unsigned long)(len >> 29);
@@ -494,9 +495,9 @@ static bool extract_file(FILE *archive, const struct tar_header *header,
         output_filename[sizeof(output_filename) - 1] = '\0';
     }
     
-    /* Get SHA-256 from archive header */
-    strncpy(archive_sha256, header->linkname, SHA256_HEX_SIZE);
-    archive_sha256[SHA256_HEX_SIZE] = '\0';
+    /* Get SHA-256 from archive header (64 hex chars) */
+    strncpy(archive_sha256, header->linkname, SHA256_HEX_SIZE - 1);
+    archive_sha256[SHA256_HEX_SIZE - 1] = '\0';
     
     /* Handle different extraction modes */
     if (mode == MODE_SAFE) {
