@@ -2225,7 +2225,7 @@ void move_range(Editor *ed, AddressRange range, int dest_addr)
         else if (range.start < adjusted_dest + 1)
         {
             // Moving forward: marks between old and new positions shift down
-            if (ed->marks[i] > range.end && ed->marks[i] <= adjusted_dest)
+            if (ed->marks[i] > range.end && ed->marks[i] <= dest_addr)
             {
                 ed->marks[i] -= num_lines;
             }
