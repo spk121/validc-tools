@@ -307,7 +307,8 @@ int parse_one_address(const char **pp, int current, int last_line, const int mar
         const char *t = p + 1;
         while (isdigit((unsigned char)*t))
             t++;
-        // Redundant check removed - after while loop, *t is guaranteed to not be a digit
+        // After while loop above, *t is guaranteed to not be a digit
+        // Check if followed by +/- (which would indicate this isn't standalone "0")
         if (*t != '+' && *t != '-')
         {
             base = 0;
@@ -2207,11 +2208,37 @@ void move_range(Editor *ed, AddressRange range, int dest_addr)
     ed->current_line = adjusted_dest + num_lines; // last moved line (0-indexed)
     ed->dirty = 1;
     
-    // Update marks: this is complex as lines are removed then inserted
-    // First update for the deletion
-    update_marks_after_delete(ed, range.start, num_lines);
-    // Then update for the insertion at adjusted destination
-    update_marks_after_insert(ed, adjusted_dest + 1, num_lines);
+    // Update marks after move operation
+    // This is complex: marks in the moved range need to move to the new location
+    // Marks between source and dest need to shift
+    for (int i = 0; i < 26; i++)
+    {
+        if (ed->marks[i] < 0)
+            continue; // Mark not set
+        
+        if (ed->marks[i] >= range.start && ed->marks[i] <= range.end)
+        {
+            // Mark was in moved range - move it to new location
+            int offset = ed->marks[i] - range.start; // Offset within moved range
+            ed->marks[i] = adjusted_dest + 1 + offset;
+        }
+        else if (range.start < adjusted_dest + 1)
+        {
+            // Moving forward: marks between old and new positions shift down
+            if (ed->marks[i] > range.end && ed->marks[i] <= adjusted_dest)
+            {
+                ed->marks[i] -= num_lines;
+            }
+        }
+        else
+        {
+            // Moving backward: marks between new and old positions shift up
+            if (ed->marks[i] >= adjusted_dest + 1 && ed->marks[i] < range.start)
+            {
+                ed->marks[i] += num_lines;
+            }
+        }
+    }
 }
 
 // Copy/transfer command: copy range to after dest_addr
