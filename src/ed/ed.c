@@ -1,4 +1,5 @@
 #include <ctype.h>
+#include <limits.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -50,6 +51,8 @@ void load_file(Editor *ed, const char *filename);
 static char *read_full_line(FILE *fp, int *had_newline);
 static void critical_error(Editor *ed); // forward declaration for set_error
 static void set_error(Editor *ed, const char *msg);
+static void update_marks_after_delete(Editor *ed, int start_line, int num_deleted);
+static void update_marks_after_insert(Editor *ed, int insert_line, int num_inserted);
 
 // Undo support
 static void prepare_undo(Editor *ed)
@@ -118,6 +121,49 @@ static void set_error(Editor *ed, const char *msg)
     else
     {
         PRINTF("?\n");
+    }
+}
+
+// Update marks after deleting lines
+// start_line: 0-based index of first deleted line
+// num_deleted: number of lines deleted
+static void update_marks_after_delete(Editor *ed, int start_line, int num_deleted)
+{
+    for (int i = 0; i < 26; i++)
+    {
+        if (ed->marks[i] < 0)
+            continue; // Mark not set
+        
+        if (ed->marks[i] >= start_line && ed->marks[i] < start_line + num_deleted)
+        {
+            // Mark was in deleted range - invalidate it
+            ed->marks[i] = -1;
+        }
+        else if (ed->marks[i] >= start_line + num_deleted)
+        {
+            // Mark was after deleted range - shift it down
+            ed->marks[i] -= num_deleted;
+        }
+        // Marks before start_line are unaffected
+    }
+}
+
+// Update marks after inserting lines
+// insert_line: 0-based index where insertion starts
+// num_inserted: number of lines inserted
+static void update_marks_after_insert(Editor *ed, int insert_line, int num_inserted)
+{
+    for (int i = 0; i < 26; i++)
+    {
+        if (ed->marks[i] < 0)
+            continue; // Mark not set
+        
+        if (ed->marks[i] >= insert_line)
+        {
+            // Mark was at or after insertion point - shift it up
+            ed->marks[i] += num_inserted;
+        }
+        // Marks before insert_line are unaffected
     }
 }
 
@@ -228,7 +274,11 @@ int parse_one_address(const char **pp, int current, int last_line, const int mar
     {
         while (isdigit((unsigned char)*p))
         {
-            offset = offset * 10 + (*p - '0');
+            int digit = (*p - '0');
+            // Check for overflow before multiplication
+            if (offset > INT_MAX / 10 || (offset == INT_MAX / 10 && digit > INT_MAX % 10))
+                return ADDR_ERROR;
+            offset = offset * 10 + digit;
             p++;
         }
         base = current; // relative to current line
@@ -257,7 +307,8 @@ int parse_one_address(const char **pp, int current, int last_line, const int mar
         const char *t = p + 1;
         while (isdigit((unsigned char)*t))
             t++;
-        if (!isdigit((unsigned char)*t) && *t != '+' && *t != '-')
+        // Redundant check removed - after while loop, *t is guaranteed to not be a digit
+        if (*t != '+' && *t != '-')
         {
             base = 0;
             p++;
@@ -269,15 +320,20 @@ int parse_one_address(const char **pp, int current, int last_line, const int mar
         base = 0;
         while (isdigit((unsigned char)*p))
         {
-            base = base * 10 + (*p - '0');
+            int digit = (*p - '0');
+            // Check for overflow before multiplication
+            if (base > INT_MAX / 10 || (base == INT_MAX / 10 && digit > INT_MAX % 10))
+                return ADDR_ERROR;
+            base = base * 10 + digit;
             p++;
         }
     }
     else if (*p == '\'' && p[1] >= 'a' && p[1] <= 'z')
     {
         int mark_idx = marks[p[1] - 'a'];
-        if (mark_idx < 0)
-            return ADDR_ERROR; // unmarked
+        // Check if mark is set and points to a valid line
+        if (mark_idx < 0 || mark_idx >= last_line)
+            return ADDR_ERROR; // unmarked or out of bounds
         base = mark_idx + 1;   // Convert from 0-based to 1-based
         p += 2;
     }
@@ -697,7 +753,9 @@ void append_line(Editor *ed, int addr)
 {
     prepare_undo(ed);
     int original_num_lines = ed->num_lines;
+    int first_insert_pos = addr + 1; // Where first line will be inserted (0-indexed)
     int last_inserted_index = -1;
+    int num_inserted = 0;
     if (!input_fp)
         PRINTF("(Enter text, end with '.' on a new line)\n");
     while (1)
@@ -727,6 +785,7 @@ void append_line(Editor *ed, int addr)
         ed->num_lines++;
         addr++;
         last_inserted_index = addr;
+        num_inserted++;
         if (!had_nl)
             break; // Last line without newline (EOF mid-line)
     }
@@ -749,14 +808,20 @@ void append_line(Editor *ed, int addr)
         // If buffer is empty, leave current_line as is (probably -1 or 0)
     }
     if (ed->num_lines > original_num_lines)
+    {
         ed->dirty = 1;
+        // Update marks after insertion
+        update_marks_after_insert(ed, first_insert_pos, num_inserted);
+    }
 }
 
 void insert_line(Editor *ed, int addr)
 {
     prepare_undo(ed);
     int original_num_lines = ed->num_lines;
+    int first_insert_pos = addr; // Where first line will be inserted (0-indexed)
     int last_inserted_index = -1;
+    int num_inserted = 0;
     if (!input_fp)
         PRINTF("(Enter text, end with '.' on a new line)\n");
     while (1)
@@ -785,6 +850,7 @@ void insert_line(Editor *ed, int addr)
         ed->num_lines++;
         last_inserted_index = addr;
         addr++;
+        num_inserted++;
         if (!had_nl)
             break;
     }
@@ -798,7 +864,11 @@ void insert_line(Editor *ed, int addr)
         ed->current_line = addr;
     }
     if (ed->num_lines > original_num_lines)
+    {
         ed->dirty = 1;
+        // Update marks after insertion
+        update_marks_after_insert(ed, first_insert_pos, num_inserted);
+    }
 }
 
 void print_line(Editor *ed, int addr)
@@ -927,6 +997,8 @@ void delete_line(Editor *ed, int addr)
         ed->current_line = -1; // Empty buffer
     // Line was successfully deleted, so set dirty flag
     ed->dirty = 1;
+    // Update marks after deletion
+    update_marks_after_delete(ed, addr, 1);
 }
 
 // Delete range of lines
@@ -978,6 +1050,8 @@ void delete_range(Editor *ed, AddressRange range)
     }
 
     ed->dirty = 1;
+    // Update marks after deletion
+    update_marks_after_delete(ed, range.start, num_deleted);
 }
 
 void write_file(Editor *ed, const char *filename)
@@ -1956,6 +2030,8 @@ void read_file_at_address(Editor *ed, int addr, const char *filename)
 
     int bytes = 0;
     int insert_pos = addr + 1; // Insert after addr
+    int first_insert_pos = insert_pos; // Remember where insertion started
+    int num_inserted = 0;
 
     while (1)
     {
@@ -1982,6 +2058,7 @@ void read_file_at_address(Editor *ed, int addr, const char *filename)
         ed->lines[insert_pos] = line;
         ed->num_lines++;
         insert_pos++;
+        num_inserted++;
         bytes += (int)strlen(line) + (had_nl ? 1 : 0);
 
         if (!had_nl)
@@ -1993,6 +2070,8 @@ void read_file_at_address(Editor *ed, int addr, const char *filename)
     {
         ed->current_line = insert_pos - 1; // 0-indexed: last inserted line
         ed->dirty = 1;
+        // Update marks after insertion
+        update_marks_after_insert(ed, first_insert_pos, num_inserted);
     }
     PRINTF("%d\n", bytes);
 }
@@ -2124,17 +2203,15 @@ void move_range(Editor *ed, AddressRange range, int dest_addr)
 
     free(moved_lines);
 
-    // Set current line: the line immediately after the moved block, or last moved if at end
-    int next_idx = adjusted_dest + num_lines + 1;
-    if (next_idx < ed->num_lines)
-    {
-        ed->current_line = next_idx;
-    }
-    else
-    {
-        ed->current_line = adjusted_dest + num_lines; // last moved line at end
-    }
+    // POSIX: Current line should be set to the last line moved
+    ed->current_line = adjusted_dest + num_lines; // last moved line (0-indexed)
     ed->dirty = 1;
+    
+    // Update marks: this is complex as lines are removed then inserted
+    // First update for the deletion
+    update_marks_after_delete(ed, range.start, num_lines);
+    // Then update for the insertion at adjusted destination
+    update_marks_after_insert(ed, adjusted_dest + 1, num_lines);
 }
 
 // Copy/transfer command: copy range to after dest_addr
@@ -2185,17 +2262,11 @@ void copy_range(Editor *ed, AddressRange range, int dest_addr)
     }
 
     ed->num_lines += num_lines;
-    // Set current line: the line immediately after the copied block, or last copied if at end
-    int next_after_copy = dest_addr + num_lines + 1;
-    if (next_after_copy < ed->num_lines)
-    {
-        ed->current_line = next_after_copy;
-    }
-    else
-    {
-        ed->current_line = dest_addr + num_lines; // last copied line when at end
-    }
+    // POSIX: Current line should be set to the last line copied
+    ed->current_line = dest_addr + num_lines; // last copied line (0-indexed)
     ed->dirty = 1;
+    // Update marks after insertion
+    update_marks_after_insert(ed, dest_addr + 1, num_lines);
 }
 
 // Join command: join all lines in range into single line
@@ -2267,6 +2338,7 @@ void join_range(Editor *ed, AddressRange range)
 // Substitute over a range using BRE; if global!=0, replace all occurrences per line
 void substitute_range(Editor *ed, AddressRange range, const char *pattern, const char *replacement, int global)
 {
+    prepare_undo(ed);
     if (range.start < 0 || range.end < 0)
     {
         set_error(ed, "Invalid address");
